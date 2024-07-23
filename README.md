@@ -4,7 +4,7 @@ This script crawls a directory and looks for image files. When it finds one it d
 
 * Sends the image to the local KoboldCPP API and asks it for a caption
 * Takes that caption and sends it back to the KoboldCPP API and asks it to use the caption to create a title, keyword tags, a summary, and a suggested filename
-* Edits the image XMP metadata tags to include the title, tags, and summary
+* Edits the image metadata tags to include the title, tags, and summary
 * Stores this information in a local TinyDB database
 
 You can then do all sorts of things with it. Probably the most useful is to use Windows Search or Everything 1.5 to search the images and sort the images by tag, description, and title.
@@ -22,7 +22,7 @@ You can then do all sorts of things with it. Probably the most useful is to use 
 
 * TinyDB for a plain-text readable JSON database to keep track of indexed files
 * xxhash for fast file hashing
-* exiftool-py to do the metadata stuff
+* pyexiftool to do the metadata stuff
 * requests for API calls
 * json-repair to fix mutilated JSON responses from brain-dead LLMs
 
