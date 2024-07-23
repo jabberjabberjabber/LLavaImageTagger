@@ -207,21 +207,19 @@ class FileProcessor:
                 xmp_metadata = {}
 
                 if 'Summary' in llm_metadata:
-                    xmp_metadata['XMP:Description'] = llm_metadata['Summary']
+                    xmp_metadata['Description'] = llm_metadata['Summary']
 
                 if 'Title' in llm_metadata:
-                    xmp_metadata['XMP:Title'] = llm_metadata['Title']
+                    xmp_metadata['Title'] = llm_metadata['Title']
 
-                if llm_metadata['Tags']:
-                    xmp_metadata['XMP:Tags'] = llm_metadata['Tags']
+                if 'Tags' in llm_metadata:
+                    xmp_metadata['Keywords'] = llm_metadata['Tags']
+                    xmp_metadata['Subject'] = llm_metadata['Tags']
                     
-                if llm_metadata['Keywords']:
-                    xmp_metadata['XMP:Tags'] = llm_metadata['Keywords']
-                
-                if llm_metadata['Keyword Tags']:
-                    xmp_metadata['XMP:Tags'] = llm_metadata['Keyword Tags']
+
+
                     
-                et.set_tags(file_path, xmp_metadata)
+                et.set_tags(file_path, tags=xmp_metadata)
             print(f"Updated XMP tags for {file_path}")
         except Exception as e:
             print(f"Error updating XMP tags for {file_path}: {str(e)}")

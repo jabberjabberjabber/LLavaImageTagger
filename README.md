@@ -1,10 +1,10 @@
-**LLavaImageTagger aka LLMImageIndexer**
+**LLMImageIndexer**
 
 This script crawls a directory and looks for image files. When it finds one it does the following:
 
 * Sends the image to the local KoboldCPP API and asks it for a caption
 * Takes that caption and sends it back to the KoboldCPP API and asks it to use the caption to create a title, keyword tags, a summary, and a suggested filename
-* Edits the image XMP metadata tags to include the title, tags, and summary (this overwrites any metadata in those fields already)
+* Edits the image XMP metadata tags to include the title, tags, and summary
 * Stores this information in a local TinyDB database
 
 You can then do all sorts of things with it. Probably the most useful is to use Everything 1.5 to index the images and include the XMP metadata so that you can search and sort the images by tag, description, and title.
@@ -26,9 +26,7 @@ You can then do all sorts of things with it. Probably the most useful is to use 
 
 *Suggested models*
 
-For model I suggest ShareGPT4V-13B as the LLM and llava-v1.6-vicuna-13b-mmproj-model-f16 as the image projector.
-
-If you don't have a lot of VRAM use llava-phi-3-mini as the LLM and llava-phi-3-mini-mmproj-f16 as the image projector.
+For model use ShareGPT4V-7B or ShareGPT4V-13B with llava-v1.6-vicuna-7b-mmproj-model-f16 or llava-v1.6-vicuna-13b-mmproj-model-f16 as projectors. Don't use flash attention or quantkv
 
 *How to use*
 
@@ -61,8 +59,6 @@ pip install -r requirements.txt
 
 Make sure you have exiftool installed on your path. Try putting command arguments in quotes. Make sure KoboldCPP is running. Make sure your model can output a JSON object in a somewhat not-stupid way.
 
-**Links**
+**Notes**
 
-* https://huggingface.co/koboldcpp/mmproj
-* https://huggingface.co/Lin-Chen/ShareGPT4V-13B
-* https://huggingface.co/microsoft/Phi-3-mini-4k-instruct   
+This is not a 'just works' project. It requires that you kinda know what you are doing. I made it for myself, and am happy to share it, but I kind of suck at doing things like handling edge cases or errors or writing documentation. Run this on a directory of test files before you do anything serious with it, and know that LLMs can output all sorts of weird stuff, so it does anything you don't like, then you have been warned. 
