@@ -9,7 +9,7 @@ This script crawls a directory and looks for image files. When it finds one it d
 
 You can then do all sorts of things with it. Probably the most useful is to use Windows Search or Everything 1.5 to search the images and sort the images by tag, description, and title.
 
-![Description](images/screenshot.png)
+![Description](screenshot.png)
 
 *Requirements*
 
