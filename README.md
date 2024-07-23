@@ -7,7 +7,9 @@ This script crawls a directory and looks for image files. When it finds one it d
 * Edits the image XMP metadata tags to include the title, tags, and summary
 * Stores this information in a local TinyDB database
 
-You can then do all sorts of things with it. Probably the most useful is to use Everything 1.5 to index the images and include the XMP metadata so that you can search and sort the images by tag, description, and title.
+You can then do all sorts of things with it. Probably the most useful is to use Windows Search or Everything 1.5 to search the images and sort the images by tag, description, and title.
+
+![Description](images/screenshot.png)
 
 *Requirements*
 
