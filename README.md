@@ -4,7 +4,7 @@ This script crawls a directory and looks for image files. When it finds one it d
 
 * Sends the image to the local KoboldCPP API and asks it for a caption
 * Takes that caption and sends it back to the KoboldCPP API and asks it to use the caption to create a title, keyword tags, a summary, and a suggested filename
-* Edits the image XMP metadata tags to include the title, tags, and summary
+* Edits the image XMP metadata tags to include the title, tags, and summary (this overwrites any metadata in those fields already)
 * Stores this information in a local TinyDB database
 
 You can then do all sorts of things with it. Probably the most useful is to use Everything 1.5 to index the images and include the XMP metadata so that you can search and sort the images by tag, description, and title.
