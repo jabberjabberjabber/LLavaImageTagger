@@ -219,7 +219,7 @@ class FileProcessor:
                     xmp_metadata['XMP:Tags'] = llm_metadata['Keywords']
                 
                 if llm_metadata['Keyword Tags']:
-                    xmp_metadata['XMP:Tages'] = llm_metadata['Keyword Tags']
+                    xmp_metadata['XMP:Tags'] = llm_metadata['Keyword Tags']
                     
                 et.set_tags(file_path, xmp_metadata)
             print(f"Updated XMP tags for {file_path}")
