@@ -11,6 +11,7 @@ import requests
 import base64
 from json_repair import repair_json
 import re
+import argparse
 
 class LLMProcessor:
     def __init__(self, api_url, password):
@@ -211,12 +212,15 @@ class FileProcessor:
                 if 'Title' in llm_metadata:
                     xmp_metadata['XMP:Title'] = llm_metadata['Title']
 
-                if 'Tags' in llm_metadata:
+                if llm_metadata['Tags']:
                     xmp_metadata['XMP:Tags'] = llm_metadata['Tags']
+                    
+                if llm_metadata['Keywords']:
+                    xmp_metadata['XMP:Tags'] = llm_metadata['Keywords']
                 
-                if 'Keywords' in llm_metadata:
-                    xmp_metadata['XMP:Tags'] = llm_metadata['Keywords'] 
-
+                if llm_metadata['Keyword Tags']:
+                    xmp_metadata['XMP:Tages'] = llm_metadata['Keyword Tags']
+                    
                 et.set_tags(file_path, xmp_metadata)
             print(f"Updated XMP tags for {file_path}")
         except Exception as e:
@@ -310,16 +314,24 @@ class DatabaseHandler:
         #stored_mtime = time.mktime(time.strptime(result[0]['modified']))
         #return file_mtime > stored_mtime
 
+
 class IndexManager:
-    def __init__(self, root_dir, db_path, llm_processor):
+    def __init__(self, root_dir, db_path, llm_processor, recursive=True):
         self.root_dir = root_dir
         self.db_handler = DatabaseHandler(db_path)
         self.file_processor = FileProcessor(llm_processor)
+        self.recursive = recursive
 
     def crawl_directory(self):
-        for dirpath, _, filenames in os.walk(self.root_dir):
-            for filename in filenames:
-                yield os.path.join(dirpath, filename)
+        if self.recursive:
+            for dirpath, _, filenames in os.walk(self.root_dir):
+                for filename in filenames:
+                    yield os.path.join(dirpath, filename)
+        else:
+            for filename in os.listdir(self.root_dir):
+                file_path = os.path.join(self.root_dir, filename)
+                if os.path.isfile(file_path):
+                    yield file_path
 
     def index_files(self, force_rehash=False):
         for file_path in self.crawl_directory():
@@ -343,14 +355,24 @@ class IndexManager:
                 print(f"Skipped: {os.path.basename(file_path)}, already indexed.")
 
 if __name__ == "__main__":
-    API_URL = "http://172.16.0.219:5001"
-    API_PASSWORD = ""
-    root_directory = "c:/tools/testc"
-    db_file = "filedata.json"
-    force_rehash = False
+    parser = argparse.ArgumentParser(description="Image Indexer")
+    parser.add_argument("directory", help="Directory containing the files")
+    parser.add_argument("--api-url", default="http://localhost:5001", help="URL for the LLM API")
+    parser.add_argument("--api-password", default="", help="Password for the LLM API")
+    parser.add_argument("--no-crawl", action="store_true", help="Disable recursive indexing")
+    parser.add_argument("--force-rehash", action="store_true", help="Force rehashing of all files")
+    
+    args = parser.parse_args()
+
+    API_URL = args.api_url
+    API_PASSWORD = args.api_password
+    root_directory = args.directory
+    db_file = os.path.join(root_directory, "filedata.json")
+    force_rehash = args.force_rehash
+    recursive = not args.no_crawl
 
     llm_processor = LLMProcessor(API_URL, API_PASSWORD)
-    index_manager = IndexManager(root_directory, db_file, llm_processor)
+    index_manager = IndexManager(root_directory, db_file, llm_processor, recursive)
 
     try:
         for metadata in index_manager.index_files(force_rehash):
