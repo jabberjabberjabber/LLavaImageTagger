@@ -1,4 +1,4 @@
-**LLMImageIndexer**
+**LLavaImageTagger aka LLMImageIndexer**
 
 This script crawls a directory and looks for image files. When it finds one it does the following:
 
