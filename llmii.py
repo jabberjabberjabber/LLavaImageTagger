@@ -13,6 +13,9 @@ from json_repair import repair_json
 import re
 import argparse
 
+#OVERWRITE = False
+#DRY_RUN = False
+
 class LLMProcessor:
     def __init__(self, api_url, password):
         self.api_function_urls = {
@@ -87,7 +90,7 @@ class LLMProcessor:
         
         return clean_string(self._call_api('interrogate', payload))
     
-    def describe_content(self, content, instruction):
+    def describe_content(self, instruction="", content=""):
         prompt = self.get_prompt(instruction, content)        
         payload = {
             'prompt': prompt,
@@ -128,7 +131,6 @@ class LLMProcessor:
         
         return f"{user_part}{instruction}{content}{assistant_part}"
         
-    
     @staticmethod
     def _create_genkey():
         return f"KCP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
@@ -189,18 +191,10 @@ def clean_json(data):
         return data
         
 class FileProcessor:
-    CATEGORY_MAPPINGS = {
-        'document': ['.doc', '.docx', '.pdf', '.txt', '.rtf', '.odt'],
-        'spreadsheet': ['.xls', '.xlsx', '.csv', '.ods'],
-        'presentation': ['.ppt', '.pptx', '.odp'],
-        'image': ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.svg'],
-        'code': ['.py', '.java', '.cpp', '.h', '.js', '.cs', '.rb', '.go', '.swift'],
-        'configuration': ['.ini', '.cfg', '.conf', '.json', '.xml', '.yaml', '.yml'],
-    }
-
+    
     def __init__(self, llm_processor):
         self.llm_processor = llm_processor
-    
+
     def update_xmp_tags(self, file_path, llm_metadata):
         try:
             with exiftool.ExifToolHelper() as et:
@@ -214,35 +208,33 @@ class FileProcessor:
 
                 if 'Tags' in llm_metadata:
                     xmp_metadata['Keywords'] = llm_metadata['Tags']
-                    xmp_metadata['Subject'] = llm_metadata['Tags']
                     
-
-
+                if not DRY_RUN:
+                    if OVERWRITE:
+                        et.set_tags(file_path, tags=xmp_metadata, params=["-P", "-overwrite_original"])
+                    else:
+                        et.set_tags(file_path, tags=xmp_metadata)
                     
-                et.set_tags(file_path, tags=xmp_metadata)
-            print(f"Updated XMP tags for {file_path}")
+                    print(f"Updated XMP tags for {file_path}")
+                else:
+                    print(f"Dry run, {file_path} not updated")
         except Exception as e:
             print(f"Error updating XMP tags for {file_path}: {str(e)}")
 
-    def process_file(self, file_path, category, exif_metadata):
-        if category == 'image':
-            caption = clean_string(self.llm_processor.interrogate_image(file_path))
-            description = self.create_metadata_prompt(exif_metadata, caption)    
-            instruction = self.llm_processor.metadata_instruction + description
-            llm_metadata = clean_json(self.llm_processor.describe_content(caption, instruction))
-            #for item in llm_metadata.items()
-            
-            self.update_xmp_tags(file_path, llm_metadata)
-            
-            return {"llm_metadata": llm_metadata}
+    def process_file(self, file_path, exif_metadata):
+        caption = clean_string(self.llm_processor.interrogate_image(file_path))
+        description = self.create_metadata_prompt(exif_metadata, caption)    
+        instruction = self.llm_processor.metadata_instruction
+        llm_metadata = clean_json(self.llm_processor.describe_content(instruction=instruction, content=description))
         
-        else:
-            return {}
+        self.update_xmp_tags(file_path, llm_metadata)
+        
+        return {"llm_metadata": llm_metadata}
     
     def extract_basic_metadata(self, file_path, root_dir):
         path = pathlib.Path(file_path)
         stats = path.stat()
-        
+
         return {
             "filename": path.name,
             "relative_path": str(path.relative_to(root_dir)),
@@ -250,14 +242,9 @@ class FileProcessor:
             "created": time.ctime(stats.st_ctime),
             "modified": time.ctime(stats.st_mtime),
             "extension": path.suffix.lower(),
-            "category": self._determine_category(path.suffix.lower()),
             "file_hash": self._calculate_file_hash(file_path)
         }
-
-    def _determine_category(self, extension):
-        return next((category for category, extensions in self.CATEGORY_MAPPINGS.items() 
-                     if extension in extensions), "unknown")
-
+            
     @staticmethod
     def _calculate_file_hash(file_path):
         xxh = xxhash.xxh64()
@@ -312,9 +299,9 @@ class DatabaseHandler:
         #stored_mtime = time.mktime(time.strptime(result[0]['modified']))
         #return file_mtime > stored_mtime
 
-
 class IndexManager:
     def __init__(self, root_dir, db_path, llm_processor, recursive=True):
+        self.images_ext = ['.jpg', '.jpeg', '.png', '.gif', '.tiff', '.webp', '.psd']
         self.root_dir = root_dir
         self.db_handler = DatabaseHandler(db_path)
         self.file_processor = FileProcessor(llm_processor)
@@ -334,23 +321,21 @@ class IndexManager:
     def index_files(self, force_rehash=False):
         for file_path in self.crawl_directory():
             file_mtime = os.path.getmtime(file_path)
-            
-            if force_rehash or self.db_handler.file_needs_update(file_path, file_mtime):
-                basic_metadata = self.file_processor.extract_basic_metadata(file_path, self.root_dir)
-                category = basic_metadata['category']
-                
-                if category in ['image']:
+            if os.path.splitext(file_path)[1] in self.images_ext:
+                if force_rehash or self.db_handler.file_needs_update(file_path, file_mtime):
+                    basic_metadata = self.file_processor.extract_basic_metadata(file_path, self.root_dir)
                     exif_metadata = self.file_processor.extract_exif_metadata(file_path)
-                    processed_metadata = self.file_processor.process_file(file_path, category, exif_metadata)
-                    
+                    processed_metadata = self.file_processor.process_file(file_path, exif_metadata)
                     combined_metadata = {**basic_metadata, **exif_metadata, **processed_metadata}
-                    self.db_handler.insert_or_update(combined_metadata)
+                    if not DRY_RUN:
+                        self.db_handler.insert_or_update(combined_metadata)
                     
                     yield combined_metadata
                 else:
-                    print(f"Skipped: {os.path.basename(file_path)}, unsupported category.")
+                    print(f"Skipped: {os.path.basename(file_path)}, already indexed.")
             else:
-                print(f"Skipped: {os.path.basename(file_path)}, already indexed.")
+                print(f"Skipped: {os.path.basename(file_path)}, unsupported category.")
+                
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Image Indexer")
@@ -359,22 +344,28 @@ if __name__ == "__main__":
     parser.add_argument("--api-password", default="", help="Password for the LLM API")
     parser.add_argument("--no-crawl", action="store_true", help="Disable recursive indexing")
     parser.add_argument("--force-rehash", action="store_true", help="Force rehashing of all files")
-    
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing file metadata without making backup")
+    parser.add_argument("--dry-run", action="store_true", help="Don't write any files")
     args = parser.parse_args()
-
-    API_URL = args.api_url
-    API_PASSWORD = args.api_password
+    
+    global DRY_RUN
+    DRY_RUN = False
+    DRY_RUN = args.dry_run
+    global OVERWRITE
+    OVERWRITE = False
+    OVERWRITE = args.overwrite
+    api_url = args.api_url
+    api_password = args.api_password
     root_directory = args.directory
     db_file = os.path.join(root_directory, "filedata.json")
     force_rehash = args.force_rehash
     recursive = not args.no_crawl
-
-    llm_processor = LLMProcessor(API_URL, API_PASSWORD)
+    llm_processor = LLMProcessor(api_url, api_password)
     index_manager = IndexManager(root_directory, db_file, llm_processor, recursive)
 
     try:
         for metadata in index_manager.index_files(force_rehash):
-            print(f"Indexed: {metadata['filename']} (Category: {metadata['category']}, Hash: {metadata['file_hash']})")
+            #print(f"Indexed: {metadata['filename']} (Category: {metadata['category']}, Hash: {metadata['file_hash']})")
             if 'llm_metadata' in metadata:
                 print(f"LLM Metadata: {metadata['llm_metadata']}")
 
