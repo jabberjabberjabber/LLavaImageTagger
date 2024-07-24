@@ -43,11 +43,24 @@ It will take A LONG TIME. But because it keeps a database it won't lose its plac
 
 ```
 --api-url
-
---no-crawls
-
+```
+Place the api-url here, no trailing slash.
+```
+--no-crawl
+```
+Don't go through directories recursively.
+```
 --force-rehash
 ```
+Index all files again, whether they have been indexed before or not.
+```
+--dry-run
+```
+Don't write any files. Pretend and see what you would get.
+```
+--overwrite
+```
+Copy over file metadata without creating a backup _original file.
 
 **How to Install**
 
@@ -59,7 +72,7 @@ pip install -r requirements.txt
 
 *Troubleshooting*
 
-Make sure you have exiftool installed on your path. Try putting command arguments in quotes. Make sure KoboldCPP is running. Make sure your model can output a JSON object in a somewhat not-stupid way.
+Don't end directory with a slash. Don't end api-url with a slash. Make sure you have exiftool installed on your path. Try putting command arguments in quotes. Make sure KoboldCPP is running. Make sure your model can output a JSON object in a somewhat not-stupid way.
 
 **Notes**
 
