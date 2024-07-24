@@ -44,7 +44,7 @@ It will take A LONG TIME. But because it keeps a database it won't lose its plac
 ```
 --api-url
 ```
-Place the api-url here, no trailing slash.
+Place the api-url here, no trailing slash. Defaults to http://localhost:5001
 ```
 --no-crawl
 ```
