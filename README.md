@@ -74,6 +74,20 @@ pip install -r requirements.txt
 
 Don't end directory with a slash. Don't end api-url with a slash. Make sure you have exiftool installed on your path. Try putting command arguments in quotes. Make sure KoboldCPP is running. Make sure your model can output a JSON object in a somewhat not-stupid way.
 
+**FAQ**
+
+Q: What tags does it write to?
+
+A: Keywords, Description, Title
+
+Q: What is an 'image'?
+
+A: Any file that ends with jpeg, jpg, png, gif, webp, tiff, psd.
+
+Q: What are the prompts? Can I change the prompts? It is using the wrong prompt!
+
+A: Open the file. It is text. Change it yourself. Save it. Run it. Congrats, you are a coder.
+
 **Notes**
 
 This is not a 'just works' project. It requires that you kinda know what you are doing. I made it for myself, and am happy to share it, but I kind of suck at doing things like handling edge cases or errors or writing documentation. Run this on a directory of test files before you do anything serious with it, and know that LLMs can output all sorts of weird stuff, so it does anything you don't like, then you have been warned. 
