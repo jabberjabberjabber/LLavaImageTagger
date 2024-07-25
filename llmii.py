@@ -321,7 +321,7 @@ class IndexManager:
     def index_files(self, force_rehash=False):
         for file_path in self.crawl_directory():
             file_mtime = os.path.getmtime(file_path)
-            if os.path.splitext(file_path)[1] in self.images_ext:
+            if os.path.splitext(file_path.lower())[1] in self.images_ext:
                 if force_rehash or self.db_handler.file_needs_update(file_path, file_mtime):
                     basic_metadata = self.file_processor.extract_basic_metadata(file_path, self.root_dir)
                     exif_metadata = self.file_processor.extract_exif_metadata(file_path)
