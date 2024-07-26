@@ -29,7 +29,7 @@ class LLMProcessor:
         self.image_instruction = (
             "What do you see in the image? Be specific and descriptive"
         )
-        self.metadata_instruction = "The following caption and metadata was given for an image. Use that to determine the title, IPTC keywords, summary, subject, and suggest an appropriate filename if the current one is generic. Return as JSON object with keys Title, Keywords, Summary, Subject, and NewFilename.\n"
+        self.metadata_instruction = "The following caption and metadata was given for an image. Use that to determine the title, IPTC keywords, summary, subject, and suggest an appropriate filename if the current one is generic. Return as JSON object with keys Title, Keywords, Summary, and Subject.\n"
         self.api_url = config.api_url
         self.headers = {
             "Content-Type": "application/json",
