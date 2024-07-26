@@ -64,7 +64,9 @@ The script will set up the Python environment, install dependencies, and downloa
 - **Output**: View script progress and logs
 
 ## FAQ
-###What is it doing, exactly?
+
+*What is it doing, exactly?*
+
 This is the process the script goes through:
 - Looks in the directory for image files
    - If a new image is found it is sent to the AI asking for a detailed description
@@ -72,16 +74,20 @@ This is the process the script goes through:
    - The entry is added to the database with that information attached
    - Desired metadata fields are written to the image file itself
 
-###Why are you querying it twice?
+*Why are you querying it twice?*
+
 The first time we ask it to describe what it sees. This usually results in caption that is not suitable for a use as metadata. By sending it back with more file information and asking for a formal data object we get the data in the form we want.
 
-###Why do the windows show different things?
+*Why do the windows show different things?*
+
 You are seeing the internal workings of a program in real time interacting with a language model. It is fascinating to look at but you can't take what you see as what we are actually putting in the files or the database. You can run exiftool on the processed images, or check them in xnviewmp and see what metadata is written. The summary in the GUI window what is added to the database, but what is added to the image is whatever boxes you checked.
 
-###How do I use a different model and projector?
+*How do I use a different model and projector?*
+
 Download the GGUF weights and the mmproj weights. Open Koboldcpp.exe and configure it to use those weights and start it then run 'llmii-no-kobold.bat'.
 
-###These models refuse to describe things in my images, how do I make them?
+*These models refuse to describe things in my images, how do I make them?*
+
 Try abiliterated or uncensored weights of text only models of the same architecture and size with llava projectors. For instance a vicuna 7b projector can be used with most vicuna based models that are also 7b and llama 3 8b projectors can be used with most Llama 3 or 3.1 8b models.  
 
 ## Contributing
