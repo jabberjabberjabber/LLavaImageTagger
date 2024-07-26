@@ -24,7 +24,7 @@
     "lora": null,
     "mmproj": "https://huggingface.co/xtuner/llava-llama-3-8b-v1_1-gguf/resolve/main/llava-llama-3-8b-v1_1-mmproj-f16.gguf",
     "model": "",
-    "model_param": "https://huggingface.co/bullerwins/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_S.gguf",
+    "model_param": "https://huggingface.co/qwp4w3hyb/SFR-Iterative-DPO-LLaMA-3-8B-R-iMat-GGUF/resolve/main/sfr-iterative-dpo-llama-3-8b-r-imat-Q6_K.gguf",
     "multiuser": 8,
     "noavx2": false,
     "noblas": false,
