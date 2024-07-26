@@ -5,18 +5,6 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 import llmii
 
-class KoboldCPPThread(QThread):
-    output_received = pyqtSignal(str)
-
-    def __init__(self, command):
-        super().__init__()
-        self.command = command
-
-    def run(self):
-        process = subprocess.Popen(self.command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in process.stdout:
-            self.output_received.emit(line.strip())
-
 class IndexerThread(QThread):
     output_received = pyqtSignal(str)
 
@@ -98,15 +86,6 @@ class ImageIndexerGUI(QMainWindow):
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
 
-        # KoboldCPP options
-        kobold_layout = QHBoxLayout()
-        self.launch_kobold_checkbox = QCheckBox("Launch KoboldCPP")
-        self.kobold_command_input = QLineEdit()
-        self.kobold_command_input.setPlaceholderText("Enter KoboldCPP launch command")
-        kobold_layout.addWidget(self.launch_kobold_checkbox)
-        kobold_layout.addWidget(self.kobold_command_input)
-        layout.addLayout(kobold_layout)
-
         # Run button
         run_button = QPushButton("Run Image Indexer")
         run_button.clicked.connect(self.run_indexer)
@@ -137,13 +116,6 @@ class ImageIndexerGUI(QMainWindow):
         config.write_title = self.title_checkbox.isChecked()
         config.write_subject = self.subject_checkbox.isChecked()
         config.write_description = self.description_checkbox.isChecked()
-
-        # Launch KoboldCPP if checked
-        if self.launch_kobold_checkbox.isChecked():
-            kobold_command = self.kobold_command_input.text()
-            self.kobold_thread = KoboldCPPThread(kobold_command)
-            self.kobold_thread.output_received.connect(self.update_output)
-            self.kobold_thread.start()
 
         # Run the indexer in a separate thread
         self.indexer_thread = IndexerThread(config)
