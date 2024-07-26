@@ -13,20 +13,7 @@ class IndexerThread(QThread):
         self.config = config
 
     def run(self):
-        import io
-        import sys
-        old_stdout = sys.stdout
-        sys.stdout = buffer = io.StringIO()
-
-        try:
-            llmii.main(self.config)
-        except Exception as e:
-            self.output_received.emit(f"An error occurred: {str(e)}")
-
-        sys.stdout = old_stdout
-        output = buffer.getvalue()
-        for line in output.split('\n'):
-            self.output_received.emit(line)
+        llmii.main(self.config, self.output_received.emit)
 
 class ImageIndexerGUI(QMainWindow):
     def __init__(self):
@@ -125,10 +112,11 @@ class ImageIndexerGUI(QMainWindow):
 
         self.output_area.clear()
         self.output_area.append("Running Image Indexer...\n")
-
+        
     def update_output(self, text):
         self.output_area.append(text)
         self.output_area.verticalScrollBar().setValue(self.output_area.verticalScrollBar().maximum())
+        QApplication.processEvents() 
 
     def indexer_finished(self):
         self.update_output("Image Indexer finished.")

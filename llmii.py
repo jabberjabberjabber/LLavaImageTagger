@@ -415,7 +415,7 @@ class Config:
         
         return config
 
-def main(config=None):
+def main(config=None, callback=None):
     if config is None:
         config = Config.from_args()
     db_file = os.path.join(config.directory, "filedata.json")
@@ -425,12 +425,17 @@ def main(config=None):
     db_handler = DatabaseHandler(db_file)
     index_manager = IndexManager(config, db_handler, file_processor)
 
+    def output_handler(message):
+        print(message)  # Always print to console
+        if callback:
+            callback(message)  # Send to GUI if callback is provided
+
     try:
         for metadata in index_manager.index_files():
             if "llm_metadata" in metadata:
-                print(f"LLM Metadata: {metadata['llm_metadata']}")
+                output_handler(f"LLM Metadata: {metadata['llm_metadata']}")
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
+        output_handler(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
     main()
