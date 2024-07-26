@@ -334,7 +334,7 @@ class IndexManager:
         self.config = config
         self.db_handler = db_handler
         self.file_processor = file_processor
-        self.images_ext = [".jpg", ".jpeg", ".png", ".gif", ".tiff", ".webp", ".psd"]
+        self.images_ext = [".jpg", ".jpeg", ".png", ".gif", ".tiff"]
 
     def crawl_directory(self):
         if not self.config.no_crawl:
