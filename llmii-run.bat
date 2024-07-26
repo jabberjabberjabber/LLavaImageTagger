@@ -51,9 +51,10 @@ if errorlevel 1 (
 )
 
 REM Launch your Python script
-start koboldcpp.exe --config Llama-3.1-8B-llava.kcppt
+start koboldcpp.exe --config llmii.kcppt
 python llmii-gui.py
 
+pause
 REM Deactivate the virtual environment
 deactivate
 
