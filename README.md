@@ -12,7 +12,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - Generates AI-powered captions, titles, tags, and summaries for each image
 - Edits image metadata with the generated information
 - Stores processed data in a local TinyDB database for easy querying
-- Compatible with xnview-mp for advanced browsing and searching capabilities
+- Use with a metadata aware image viewer like xnview-mp for advanced browsing and searching capabilities
 
 ## Table of Contents
 
