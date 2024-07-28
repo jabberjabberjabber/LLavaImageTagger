@@ -88,7 +88,8 @@ Download the GGUF weights and the mmproj weights. Open Koboldcpp.exe and configu
 
 *These models refuse to describe things in my images, how do I make them?*
 
-Try abiliterated or uncensored weights of text only models of the same architecture and size with llava projectors. For instance a vicuna 7b projector can be used with most vicuna based models that are also 7b and llama 3 8b projectors can be used with most Llama 3 or 3.1 8b models.  
+- Try abliterated or uncensored weights of text only models of the same architecture and size with llava projectors. For instance a vicuna 7b projector can be used with most vicuna based models that are also 7b and llama 3 8b projectors can be used with most Llama 3 or 3.1 8b models.
+- Change the Image Instruction to something different  
 
 ## Contributing
 
