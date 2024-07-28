@@ -26,9 +26,7 @@ class LLMProcessor:
             "model": "/api/v1/model",
             "generate": "/api/v1/generate",
         }
-        self.image_instruction = (
-            "What do you see in the image? Be specific and descriptive"
-        )
+        self.image_instruction = config.image_instruction
         self.metadata_instruction = "The following caption and metadata was given for an image. Use that to determine the title, IPTC keywords, summary, and subject. Return as JSON object with keys Title, Keywords, Summary, and Subject.\n"
         self.api_url = config.api_url
         self.headers = {
@@ -58,6 +56,7 @@ class LLMProcessor:
         }
         self.model = self._get_model()
         self.max_context = self._get_max_context_length()
+
 
     def _call_api(self, api_function, payload=None):
         if api_function not in self.api_function_urls:
@@ -156,6 +155,57 @@ class LLMProcessor:
         payload = {"prompt": content, "genkey": self.genkey}
 
         return self._call_api("tokencount", payload)
+
+
+class Config:
+    def __init__(self):
+        self.directory = None
+        self.api_url = None
+        self.api_password = None
+        self.no_crawl = False
+        self.force_rehash = False
+        self.overwrite = False
+        self.dry_run = False
+        self.write_keywords = False
+        self.write_title = False
+        self.write_subject = False
+        self.write_description = False
+        self.image_instruction = "What do you see in the image? Be specific and descriptive"
+
+    @classmethod
+    def from_args(cls):
+        parser = argparse.ArgumentParser(description="Image Indexer")
+        parser.add_argument("directory", help="Directory containing the files")
+        parser.add_argument("--api-url", default="http://localhost:5001", help="URL for the LLM API")
+        parser.add_argument("--api-password", default="", help="Password for the LLM API")
+        parser.add_argument("--no-crawl", action="store_true", help="Disable recursive indexing")
+        parser.add_argument("--force-rehash", action="store_true", help="Force rehashing of all files")
+        parser.add_argument("--overwrite", action="store_true", help="Overwrite existing file metadata without making backup")
+        parser.add_argument("--dry-run", action="store_true", help="Don't write any files")
+        parser.add_argument("--write-keywords", action="store_true", help="Write Keywords metadata")
+        parser.add_argument("--write-title", action="store_true", help="Write Title metadata")
+        parser.add_argument("--write-subject", action="store_true", help="Write Subject metadata")
+        parser.add_argument("--write-description", action="store_true", help="Write Description metadata")
+        parser.add_argument("--image-instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
+        
+        args = parser.parse_args()
+        
+        config = cls()
+        config.directory = args.directory
+        config.api_url = args.api_url
+        config.api_password = args.api_password
+        config.no_crawl = args.no_crawl
+        config.force_rehash = args.force_rehash
+        config.overwrite = args.overwrite
+        config.dry_run = args.dry_run
+        config.write_keywords = args.write_keywords
+        config.write_title = args.write_title
+        config.write_subject = args.write_subject
+        config.write_description = args.write_description
+        config.image_instruction = args.image_instruction
+        
+        return config
+
 
 def clean_string(data):
     if isinstance(data, dict):
@@ -368,54 +418,8 @@ class IndexManager:
             else:
                 #print(f"Skipped: {os.path.basename(file_path)}, unsupported category.")
                 pass
-class Config:
-    def __init__(self):
-        self.directory = None
-        self.api_url = None
-        self.api_password = None
-        self.no_crawl = False
-        self.force_rehash = False
-        self.overwrite = False
-        self.dry_run = False
-        self.write_keywords = False
-        self.write_title = False
-        self.write_subject = False
-        self.write_description = False
 
-    @classmethod
-    def from_args(cls):
-        parser = argparse.ArgumentParser(description="Image Indexer")
-        parser.add_argument("directory", help="Directory containing the files")
-        parser.add_argument("--api-url", default="http://localhost:5001", help="URL for the LLM API")
-        parser.add_argument("--api-password", default="", help="Password for the LLM API")
-        parser.add_argument("--no-crawl", action="store_true", help="Disable recursive indexing")
-        parser.add_argument("--force-rehash", action="store_true", help="Force rehashing of all files")
-        parser.add_argument("--overwrite", action="store_true", help="Overwrite existing file metadata without making backup")
-        parser.add_argument("--dry-run", action="store_true", help="Don't write any files")
-        parser.add_argument("--write-keywords", action="store_true", help="Write Keywords metadata")
-        parser.add_argument("--write-title", action="store_true", help="Write Title metadata")
-        parser.add_argument("--write-subject", action="store_true", help="Write Subject metadata")
-        parser.add_argument("--write-description", action="store_true", help="Write Description metadata")
-
-        
-        args = parser.parse_args()
-        
-        config = cls()
-        config.directory = args.directory
-        config.api_url = args.api_url
-        config.api_password = args.api_password
-        config.no_crawl = args.no_crawl
-        config.force_rehash = args.force_rehash
-        config.overwrite = args.overwrite
-        config.dry_run = args.dry_run
-        config.write_keywords = args.write_keywords
-        config.write_title = args.write_title
-        config.write_subject = args.write_subject
-        config.write_description = args.write_description
-        
-        return config
-
-def main(config=None, callback=None):
+def main(config=None, callback=None, check_paused=None):
     if config is None:
         config = Config.from_args()
     db_file = os.path.join(config.directory, "filedata.json")
@@ -432,6 +436,8 @@ def main(config=None, callback=None):
 
     try:
         for metadata in index_manager.index_files():
+            if check_paused:
+                check_paused()  # Check if paused
             if "llm_metadata" in metadata:
                 output_handler(f"LLM Metadata: {metadata['llm_metadata']}")
     except Exception as e:
