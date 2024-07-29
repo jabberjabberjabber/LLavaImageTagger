@@ -346,17 +346,19 @@ class FileProcessor:
             return {}
 
     def create_metadata_prompt(self, exif_metadata, caption):
-        prompt = ""
-
-        prompt += "Metadata:\n"
+        prompt = "Metadata:\n"
+        clean_metadata = {}
+        
         for key, value in exif_metadata.get("exif_metadata", {}).items():
-            prompt += f"{key} is {value}\n "
+            clean_key = key.split(':')[-1]
+            clean_metadata[clean_key] = value
+            if clean_key not in ['Keywords', 'Description', 'Title', 'Subject', 'Caption']:
+                prompt += f"{clean_key} is {value}\n"
         
         if caption:
-            prompt += f"\nCaption: {caption}\n"
-        prompt = prompt.rstrip(", ")
-
-        return prompt
+            prompt += f"\nCaption: {caption}"
+        
+        return prompt.rstrip()
 
 
 class DatabaseHandler:

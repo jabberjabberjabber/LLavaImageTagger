@@ -63,30 +63,34 @@ class ImageIndexerGUI(QMainWindow):
         # Checkboxes for options
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout()
-        self.no_crawl_checkbox = QCheckBox("No Crawl (Disable recursive indexing)")
-        self.force_rehash_checkbox = QCheckBox("Force Rehash")
-        self.overwrite_checkbox = QCheckBox("Overwrite")
-        self.dry_run_checkbox = QCheckBox("Dry Run")
+        self.no_crawl_checkbox = QCheckBox("Don't crawl subdirectories")
+        self.force_rehash_checkbox = QCheckBox("Redo (files will have checked metadata cleared and regenerated)")
+        self.overwrite_checkbox = QCheckBox("Don't make backups before writing")
+        self.dry_run_checkbox = QCheckBox("Pretend mode (see what happens without writing)")
         options_layout.addWidget(self.no_crawl_checkbox)
         options_layout.addWidget(self.force_rehash_checkbox)
         options_layout.addWidget(self.overwrite_checkbox)
         options_layout.addWidget(self.dry_run_checkbox)
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
+        
 
         # XMP/Metadata tag checkboxes
-        xmp_group = QGroupBox("XMP/Metadata Tags to Write")
+        xmp_group = QGroupBox("Metadata Tags to Generate")
         xmp_layout = QVBoxLayout()
         self.keywords_checkbox = QCheckBox("Keywords")
-        self.title_checkbox = QCheckBox("Title")
+     #   self.caption_checkbox = QCheckBox("Caption")
         self.subject_checkbox = QCheckBox("Subject")
+        self.title_checkbox = QCheckBox("Title")
         self.description_checkbox = QCheckBox("Description")
         xmp_layout.addWidget(self.keywords_checkbox)
+    #    xmp_layout.addWidget(self.caption_checkbox)
         xmp_layout.addWidget(self.title_checkbox)
         xmp_layout.addWidget(self.subject_checkbox)
         xmp_layout.addWidget(self.description_checkbox)
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
+
 
         # Run and Pause buttons
         button_layout = QHBoxLayout()
