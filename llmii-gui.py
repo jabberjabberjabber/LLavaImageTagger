@@ -12,16 +12,20 @@ class IndexerThread(QThread):
         super().__init__()
         self.config = config
         self.paused = False
+        self.stopped = False
 
     def run(self):
-        llmii.main(self.config, self.output_received.emit, self.check_paused)
+        llmii.main(self.config, self.output_received.emit, self.check_paused_or_stopped)
 
-    def check_paused(self):
-        while self.paused:
+    def check_paused_or_stopped(self):
+        while self.paused and not self.stopped:
             self.msleep(100)
+        if self.stopped:
+            raise Exception("Indexer stopped by user")
 
 class PauseHandler(QObject):
     pause_signal = pyqtSignal(bool)
+    stop_signal = pyqtSignal()
 
 class ImageIndexerGUI(QMainWindow):
     def __init__(self):
@@ -73,34 +77,36 @@ class ImageIndexerGUI(QMainWindow):
         options_layout.addWidget(self.dry_run_checkbox)
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
-        
 
         # XMP/Metadata tag checkboxes
         xmp_group = QGroupBox("Metadata Tags to Generate")
         xmp_layout = QVBoxLayout()
         self.keywords_checkbox = QCheckBox("Keywords")
-     #   self.caption_checkbox = QCheckBox("Caption")
         self.subject_checkbox = QCheckBox("Subject")
         self.title_checkbox = QCheckBox("Title")
         self.description_checkbox = QCheckBox("Description")
-        xmp_layout.addWidget(self.keywords_checkbox)
-    #    xmp_layout.addWidget(self.caption_checkbox)
+        self.caption_checkbox = QCheckBox("Caption")
         xmp_layout.addWidget(self.title_checkbox)
         xmp_layout.addWidget(self.subject_checkbox)
+        xmp_layout.addWidget(self.keywords_checkbox)
+        xmp_layout.addWidget(self.caption_checkbox)
         xmp_layout.addWidget(self.description_checkbox)
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
 
-
-        # Run and Pause buttons
+        # Run, Pause, and Stop buttons
         button_layout = QHBoxLayout()
         self.run_button = QPushButton("Run Image Indexer")
         self.run_button.clicked.connect(self.run_indexer)
-        #self.pause_button = QPushButton("Pause")
-        #self.pause_button.clicked.connect(self.toggle_pause)
-        #self.pause_button.setEnabled(False)
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self.pause_button.setEnabled(False)
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.clicked.connect(self.stop_indexer)
+        self.stop_button.setEnabled(False)
         button_layout.addWidget(self.run_button)
-        #button_layout.addWidget(self.pause_button)
+        button_layout.addWidget(self.pause_button)
+        button_layout.addWidget(self.stop_button)
         layout.addLayout(button_layout)
 
         # Output area
@@ -130,30 +136,30 @@ class ImageIndexerGUI(QMainWindow):
         config.write_title = self.title_checkbox.isChecked()
         config.write_subject = self.subject_checkbox.isChecked()
         config.write_description = self.description_checkbox.isChecked()
+        config.write_caption = self.caption_checkbox.isChecked()
         config.image_instruction = self.image_instruction_input.text()
 
         # Run the indexer in a separate thread
         self.indexer_thread = IndexerThread(config)
         self.indexer_thread.output_received.connect(self.update_output)
         self.indexer_thread.finished.connect(self.indexer_finished)
-        #self.pause_handler.pause_signal.connect(self.indexer_thread.setPaused)
+        self.pause_handler.pause_signal.connect(self.set_paused)
+        self.pause_handler.stop_signal.connect(self.set_stopped)
         self.indexer_thread.start()
 
         self.output_area.clear()
         self.output_area.append("Running Image Indexer...\n")
         self.run_button.setEnabled(False)
-        #self.pause_button.setEnabled(True)
-        
-    def update_output(self, text):
-        self.output_area.append(text)
-        self.output_area.verticalScrollBar().setValue(self.output_area.verticalScrollBar().maximum())
-        QApplication.processEvents() 
+        self.pause_button.setEnabled(True)
+        self.stop_button.setEnabled(True)
 
-    def indexer_finished(self):
-        self.update_output("Image Indexer finished.")
-        self.run_button.setEnabled(True)
-        #self.pause_button.setEnabled(False)
-        #self.pause_button.setText("Pause")
+    def set_paused(self, paused):
+        if self.indexer_thread:
+            self.indexer_thread.paused = paused
+
+    def set_stopped(self):
+        if self.indexer_thread:
+            self.indexer_thread.stopped = True
 
     def toggle_pause(self):
         if self.pause_button.text() == "Pause":
@@ -164,6 +170,25 @@ class ImageIndexerGUI(QMainWindow):
             self.pause_handler.pause_signal.emit(False)
             self.pause_button.setText("Pause")
             self.update_output("Indexer resumed.")
+
+    def stop_indexer(self):
+        self.pause_handler.stop_signal.emit()
+        self.update_output("Stopping indexer...")
+        self.run_button.setEnabled(True)
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+
+    def indexer_finished(self):
+        self.update_output("Image Indexer finished.")
+        self.run_button.setEnabled(True)
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.pause_button.setText("Pause")
+
+    def update_output(self, text):
+        self.output_area.append(text)
+        self.output_area.verticalScrollBar().setValue(self.output_area.verticalScrollBar().maximum())
+        QApplication.processEvents()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

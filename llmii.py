@@ -97,7 +97,7 @@ class LLMProcessor:
             "temperature": 0.1,
         }
 
-        return clean_string(self._call_api("interrogate", payload))
+        return self._call_api("interrogate", payload)
 
     def describe_content(self, instruction="", content=""):
         prompt = self.get_prompt(instruction, content)
@@ -170,6 +170,7 @@ class Config:
         self.write_title = False
         self.write_subject = False
         self.write_description = False
+        self.write_caption = False
         self.image_instruction = "What do you see in the image? Be specific and descriptive"
 
     @classmethod
@@ -186,6 +187,7 @@ class Config:
         parser.add_argument("--write-title", action="store_true", help="Write Title metadata")
         parser.add_argument("--write-subject", action="store_true", help="Write Subject metadata")
         parser.add_argument("--write-description", action="store_true", help="Write Description metadata")
+        parser.add_argument("--write-caption", action="store_true", help="Write Caption metadata")
         parser.add_argument("--image-instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
         
         args = parser.parse_args()
@@ -202,6 +204,7 @@ class Config:
         config.write_title = args.write_title
         config.write_subject = args.write_subject
         config.write_description = args.write_description
+        config.write_caption = args.write_caption
         config.image_instruction = args.image_instruction
         
         return config
@@ -214,6 +217,9 @@ def clean_string(data):
         data = re.sub(r"\n", "", data)
         data = re.sub(r'["""]', '"', data)
         data = re.sub(r"\\{2}", "", data)
+        last_period = data.rfind('.')
+        if last_period != -1:
+            data = data[:last_period+1]
 
     return data
 
@@ -260,19 +266,19 @@ class FileProcessor:
             with exiftool.ExifToolHelper() as et:
                 xmp_metadata = {}
                 if self.config.write_keywords and "Keywords" in llm_metadata:
-                    xmp_metadata["Keywords"] = llm_metadata["Keywords"]
+                    xmp_metadata["IPTC:Keywords"] = llm_metadata["Keywords"]
                 
                 if self.config.write_title and "Title" in llm_metadata:
-                    xmp_metadata["Title"] = llm_metadata["Title"]
+                    xmp_metadata["XMP-dc:Title"] = llm_metadata["Title"]
                 
                 if self.config.write_subject and "Subject" in llm_metadata:
-                    xmp_metadata["Subject"] = llm_metadata["Subject"]
+                    xmp_metadata["XMP-dc:Subject"] = llm_metadata["Subject"]
                 
                 if self.config.write_description and "Summary" in llm_metadata:
-                    xmp_metadata["Description"] = llm_metadata["Summary"]
+                    xmp_metadata["XMP-dc:Description"] = llm_metadata["Summary"]
                     
-               # if self.config.write_caption and "Summary" in llm_metadata:
-                    xmp_metadata["Caption"] = llm_metadata["Summary"]
+                if self.config.write_caption and self.caption:
+                    xmp_metadata["Caption"] = self.caption
               
                 if not self.config.dry_run:
                     if self.config.overwrite:
@@ -292,8 +298,8 @@ class FileProcessor:
             print(f"Error updating XMP tags for {file_path}: {str(e)}")
 
     def process_file(self, file_path, exif_metadata):
-        caption = clean_string(self.llm_processor.interrogate_image(file_path))
-        description = self.create_metadata_prompt(exif_metadata, caption)
+        self.caption = clean_string(self.llm_processor.interrogate_image(file_path))
+        description = self.create_metadata_prompt(exif_metadata, self.caption)
         instruction = self.llm_processor.metadata_instruction
         llm_metadata = clean_json(
             self.llm_processor.describe_content(
@@ -303,7 +309,7 @@ class FileProcessor:
 
         self.update_xmp_tags(file_path, llm_metadata)
 
-        return {"llm_metadata": llm_metadata}
+        return {"llm_metadata": llm_metadata, "Caption": self.caption}
 
     def extract_basic_metadata(self, file_path, root_dir):
         path = pathlib.Path(file_path)
@@ -392,17 +398,17 @@ class IndexManager:
         if not self.config.no_crawl:
             for dirpath, _, filenames in os.walk(self.config.directory):
                 for filename in filenames:
-                    
                     yield os.path.join(dirpath, filename)
         else:
             for filename in os.listdir(self.config.directory):
                 file_path = os.path.join(self.config.directory, filename)
                 if os.path.isfile(file_path):
-                    
                     yield file_path
                     
-    def index_files(self):
+    def index_files(self, check_paused_or_stopped):
         for file_path in self.crawl_directory():
+            if check_paused_or_stopped:
+                check_paused_or_stopped()  # Check if paused or stopped
             file_mtime = os.path.getmtime(file_path)
             if os.path.splitext(file_path.lower())[1] in self.images_ext:
                 if self.config.force_rehash or self.db_handler.file_needs_update(file_path, file_mtime):
@@ -416,12 +422,9 @@ class IndexManager:
                     yield combined_metadata
                 else:
                     pass
-                    #print(f"Skipped: {os.path.basename(file_path)}, already indexed.")
             else:
-                #print(f"Skipped: {os.path.basename(file_path)}, unsupported category.")
                 pass
-
-def main(config=None, callback=None, check_paused=None):
+def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
     db_file = os.path.join(config.directory, "filedata.json")
@@ -437,11 +440,21 @@ def main(config=None, callback=None, check_paused=None):
             callback(message)  # Send to GUI if callback is provided
 
     try:
-        for metadata in index_manager.index_files():
-            if check_paused:
-                check_paused()  # Check if paused
+        for metadata in index_manager.index_files(check_paused_or_stopped):
             if "llm_metadata" in metadata:
-                output_handler(f"LLM Metadata: {metadata['llm_metadata']}")
+                output_message = f"File: {metadata.get('filename', 'Unknown')}\n"
+                if config.write_title and 'Title' in metadata['llm_metadata']:
+                    output_message += f"Title: {metadata['llm_metadata']['Title']}\n"
+                if config.write_subject and 'Subject' in metadata['llm_metadata']:
+                    output_message += f"Subject: {metadata['llm_metadata']['Subject']}\n"
+                if config.write_keywords and 'Keywords' in metadata['llm_metadata']:
+                    output_message += f"Keywords: {metadata['llm_metadata']['Keywords']}\n"
+                if config.write_caption:
+                    output_message += f"Caption: {metadata.get('Caption', 'N/A')}\n"
+                if config.write_description and 'Summary' in metadata['llm_metadata']:
+                    output_message += f"Description: {metadata['llm_metadata']['Summary']}\n"
+                output_message += "\n"  # Add a blank line between files
+                output_handler(output_message)
     except Exception as e:
         output_handler(f"An error occurred: {str(e)}")
 
