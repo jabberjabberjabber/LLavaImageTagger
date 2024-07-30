@@ -4,3 +4,4 @@ xxhash
 json_repair
 requests
 pyqt6
+Pillow
