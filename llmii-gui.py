@@ -1,6 +1,6 @@
 import sys
 import os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog, QTextEdit, QGroupBox
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog, QTextEdit, QGroupBox, QSpinBox
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
 import llmii
@@ -78,22 +78,33 @@ class ImageIndexerGUI(QMainWindow):
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
 
-        # XMP/Metadata tag checkboxes
         xmp_group = QGroupBox("Metadata Tags to Generate")
         xmp_layout = QVBoxLayout()
+        
+        keywords_layout = QHBoxLayout()
         self.keywords_checkbox = QCheckBox("Keywords")
+        self.keywords_count = QSpinBox()
+        self.keywords_count.setMinimum(1)
+        self.keywords_count.setMaximum(50)
+        self.keywords_count.setValue(7)
+        
+        keywords_layout.addWidget(self.keywords_checkbox)
+        keywords_layout.addWidget(QLabel("How many keywords?\n(More will decrease speed)"))
+        keywords_layout.addWidget(self.keywords_count)
+        
         self.subject_checkbox = QCheckBox("Subject")
         self.title_checkbox = QCheckBox("Title")
         self.description_checkbox = QCheckBox("Description")
         self.caption_checkbox = QCheckBox("Caption")
         xmp_layout.addWidget(self.title_checkbox)
         xmp_layout.addWidget(self.subject_checkbox)
-        xmp_layout.addWidget(self.keywords_checkbox)
+        
         xmp_layout.addWidget(self.caption_checkbox)
         xmp_layout.addWidget(self.description_checkbox)
+        xmp_layout.addLayout(keywords_layout)
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
-
+        
         # Run, Pause, and Stop buttons
         button_layout = QHBoxLayout()
         self.run_button = QPushButton("Run Image Indexer")
@@ -133,11 +144,13 @@ class ImageIndexerGUI(QMainWindow):
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
         config.write_keywords = self.keywords_checkbox.isChecked()
+        config.keywords_count = self.keywords_count.value()
         config.write_title = self.title_checkbox.isChecked()
         config.write_subject = self.subject_checkbox.isChecked()
         config.write_description = self.description_checkbox.isChecked()
         config.write_caption = self.caption_checkbox.isChecked()
         config.image_instruction = self.image_instruction_input.text()
+
 
         # Run the indexer in a separate thread
         self.indexer_thread = IndexerThread(config)

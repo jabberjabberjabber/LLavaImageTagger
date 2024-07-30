@@ -32,7 +32,7 @@ class LLMProcessor:
         
         self.image_instruction = config.image_instruction
         
-        self.metadata_instruction = "The following caption and metadata was given for an image. Use that to determine the title, IPTC keywords, summary, and subject. Return as JSON object with keys Title, Keywords, Summary, and Subject.\n"
+        self.metadata_instruction = f"Use the metadata and caption to generate a title, summary, subject and no fewer than {self.config.keywords_count} IPTC keywords. Return as a JSON object with keys Title, Summary, Subject, and Keywords.\n"
         
         self.api_url = config.api_url
         
@@ -137,7 +137,7 @@ class LLMProcessor:
         payload = {
             "prompt": prompt,
             "images": [base64_image],
-            "max_length": 150,
+            "max_length": 100 + (self.config.keywords_count * 10),
             "genkey": self.genkey,
             "model": "clip",
             "temperature": 0.1,
@@ -149,7 +149,7 @@ class LLMProcessor:
         prompt = self.get_prompt(instruction, content)
         payload = {
             "prompt": prompt,
-            "max_length": 256,
+            "max_length": 200 + (self.config.keywords_count * 20),
             "genkey": self.genkey,
             "top_p": 1,
             "top_k": 0,
@@ -222,7 +222,8 @@ class Config:
         self.write_description = False
         self.write_caption = False
         self.image_instruction = "What do you see in the image? Be specific and descriptive"
-
+        self.keywords_count = 7
+        
     @classmethod
     def from_args(cls):
         parser = argparse.ArgumentParser(description="Image Indexer")
@@ -238,8 +239,8 @@ class Config:
         parser.add_argument("--write-subject", action="store_true", help="Write Subject metadata")
         parser.add_argument("--write-description", action="store_true", help="Write Description metadata")
         parser.add_argument("--write-caption", action="store_true", help="Write Caption metadata")
+        parser.add_argument("--keywords-count", type=int, default=7, help="Number of keywords to generate")
         parser.add_argument("--image-instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
-        
         args = parser.parse_args()
         
         config = cls()
@@ -255,8 +256,9 @@ class Config:
         config.write_subject = args.write_subject
         config.write_description = args.write_description
         config.write_caption = args.write_caption
+        config.keywords_count = args.keywords_count
         config.image_instruction = args.image_instruction
-        
+            
         return config
 
 
@@ -309,7 +311,7 @@ class FileProcessor:
         self.max_megapixels = 16
         self.target_megapixels = 8
 
-    def process_file(self, file_path, exif_metadata, mime_type):
+    def process_file(self, file_path, basic_metadata, mime_type):
         self.mime_type = mime_type
         image_data = self.prepare_image_for_api(file_path)
         if image_data is None:
@@ -317,7 +319,7 @@ class FileProcessor:
             return None
 
         self.caption = clean_string(self.llm_processor.interrogate_image(image_data))
-        description = self.create_metadata_prompt(exif_metadata, self.caption)
+        description = self.create_metadata_prompt(basic_metadata, self.caption)
         instruction = self.llm_processor.metadata_instruction
         llm_metadata = clean_json(
             self.llm_processor.describe_content(
@@ -327,12 +329,6 @@ class FileProcessor:
 
         self.update_xmp_tags(file_path, llm_metadata)
         return {"llm_metadata": llm_metadata, "Caption": self.caption}
-
-    """Looks at each file to determine if it is an image by mimetype.
-
-    If so it will check if it is JPEG or PNG, and if not looks for an embedded
-    jpeg file (as in RAW files).
-    """
 
     def prepare_image_for_api(self, file_path):
         if self.mime_type in ['image/jpeg', 'image/png']:
@@ -346,11 +342,6 @@ class FileProcessor:
                         return io.BytesIO(embedded_jpeg)
             return self.process_image(file_path)
         return None
-
-    """Scales the image down if it is really big, then converts to
-    
-    RGB then JPEG. It is kept in memory the whole time to avoid writing to disk
-    """    
 
     def process_image(self, file_path):
         with Image.open(file_path) as img:
@@ -415,10 +406,10 @@ class FileProcessor:
         return {
             "filename": path.name,
             "relative_path": str(path.relative_to(root_dir)),
-            "size": stats.st_size,
+            #"size": stats.st_size,
             "created": time.ctime(stats.st_ctime),
             "modified": time.ctime(stats.st_mtime),
-            "extension": path.suffix.lower(),
+            #"extension": path.suffix.lower(),
             "file_hash": self._calculate_file_hash(file_path),
         }
 
@@ -448,15 +439,12 @@ class FileProcessor:
 
             return {}
 
-    def create_metadata_prompt(self, exif_metadata, caption):
-        prompt = "Metadata:\n"
+    def create_metadata_prompt(self, basic_metadata, caption):
+        prompt = ""
         clean_metadata = {}
         
-        for key, value in exif_metadata.get("exif_metadata", {}).items():
-            clean_key = key.split(':')[-1]
-            clean_metadata[clean_key] = value
-            if clean_key not in ['Keywords', 'Description', 'Title', 'Subject', 'Caption']:
-                prompt += f"{clean_key} is {value}\n"
+        for key, value in basic_metadata.items():
+            prompt += f"{key}: {value}\n"
         
         if caption:
             prompt += f"\nCaption: {caption}"
@@ -514,10 +502,8 @@ class IndexManager:
                 
                 if self.config.force_rehash or self.db_handler.file_needs_update(file_path, file_mtime):
                     basic_metadata = self.file_processor.extract_basic_metadata(file_path, self.config.directory)
+                    processed_metadata = self.file_processor.process_file(file_path, basic_metadata, mime_type)
                     exif_metadata = self.file_processor.extract_exif_metadata(file_path)
-                    
-                    processed_metadata = self.file_processor.process_file(file_path, exif_metadata, mime_type)
-                    
                     if processed_metadata is not None:
                         combined_metadata = {**basic_metadata, **exif_metadata, **processed_metadata}
                         if not self.config.dry_run:
