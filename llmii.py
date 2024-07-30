@@ -12,10 +12,13 @@ import base64
 from json_repair import repair_json
 import re
 import argparse
+import io
+from PIL import Image
 
 class LLMProcessor:
     def __init__(self, config):
         self.config = config
+        
         self.api_function_urls = {
             "tokencount": "/api/extra/tokencount",
             "interrogate": "/api/v1/generate",
@@ -26,41 +29,83 @@ class LLMProcessor:
             "model": "/api/v1/model",
             "generate": "/api/v1/generate",
         }
+        
         self.image_instruction = config.image_instruction
+        
         self.metadata_instruction = "The following caption and metadata was given for an image. Use that to determine the title, IPTC keywords, summary, and subject. Return as JSON object with keys Title, Keywords, Summary, and Subject.\n"
+        
         self.api_url = config.api_url
+        
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {config.api_password}",
         }
+        
         self.genkey = self._create_genkey()
+        
         self.templates = {
             1: {
                 "name": "Alpaca",
-                "user": "\n### Instruction:\n",
-                "assistant": "\n### Response:\n",
-            },
-            2: {"name": "Vicuna", "user": "\nUSER: ", "assistant": "\nASSISTANT: "},
-            3: {"name": "Llama 2", "user": "[INST] ", "assistant": " [/INST]"},
+                "user": "\n\n### Instruction:\n\n",
+                "assistant": "\n\n### Response:\n\n",
+                "system": "" #"Below is an instruction that describes a task. Write a response that  appropriately completes the request.",
+                },
+            2: {
+                "name": ["Vicuna", "Wizard", "ShareGPT", "Qwen"], 
+                "user": "### Human: ", 
+                "assistant": "\n### Assistant: ", 
+                "system": ""
+                },
+            3: {
+                "name": ["Llama 2", "Llama2", "Llamav2"], 
+                "user": "[INST] ", 
+                "assistant": " [/INST]",
+                "system": ""
+                },
             4: {
-                "name": "Llama 3",
+                "name": ["Llama 3", "Llama3", "Llama-3"],
                 "user": "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n",
                 "assistant": "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
-            },
+                "system": ""
+                },
             5: {
                 "name": "Phi-3",
                 "user": "<|end|><|user|>\n",
-                "assistant": "<|end|>\n<|assistant|>",
-            },
-            6: {"name": "Mistral", "user": "\n[INST] ", "assistant": " [/INST]\n"},
-        }
+                "assistant": "<end_of_turn><|end|><|assistant|>\n",
+                "system": ""
+                },
+            6: {
+                "name": ["Mistral", "bakllava"], 
+                "user": "\n[INST] ", 
+                "assistant": " [/INST]\n",
+                "system": ""
+                },
+            7: {
+                "name": ["Yi"],
+                "user": "<|user|>", #<|endoftext|>
+                "assistant": "<|assistant|>",
+                "system": ""
+                },
+            8: {
+                "name": ["ChatML", "obsidian", "Nous", "Hermes", "llava-v1.6-34b"],
+                "user": "<|im_start|>user\n",
+                "assistant": "<|im_end|>\n<|im_start|>assistant\n",
+                "system": ""
+                },
+            9: {
+                "name": ["WizardLM"],
+                "user": "input:\n",
+                "assistant": "output\n",
+                "system": ""
+                }    
+            }
+        
         self.model = self._get_model()
         self.max_context = self._get_max_context_length()
 
 
     def _call_api(self, api_function, payload=None):
         if api_function not in self.api_function_urls:
-
             raise ValueError(f"Invalid API function: {api_function}")
         url = f"{self.api_url}{self.api_function_urls[api_function]}"
 
@@ -69,24 +114,25 @@ class LLMProcessor:
                 response = requests.post(url, json=payload, headers=self.headers)
                 result = response.json()
                 if api_function == "tokencount":
-
                     return int(result.get("value"))
                 else:
-
                     return result["results"][0].get("text")
             else:
                 response = requests.get(url, json=payload, headers=self.headers)
                 result = response.json()
-
                 return result.get("result", None)
+        
         except requests.RequestException as e:
             print(f"Error calling API: {str(e)}")
-
             return None
 
     def interrogate_image(self, image_path):
-        with open(image_path, "rb") as image_file:
-            base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+        if isinstance(image_path, io.BytesIO):
+            base64_image = base64.b64encode(image_path.getvalue()).decode("utf-8")
+        else:
+            with open(image_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+        
         prompt = self.get_prompt(self.image_instruction, content="")
         payload = {
             "prompt": prompt,
@@ -117,21 +163,26 @@ class LLMProcessor:
     def _get_model(self):
         model_name = self._call_api("model")
         if not model_name:
-
             return None
 
         def normalize(s):
             return re.sub(r"[^a-z0-9]", "", s.lower())
 
         normalized_model_name = normalize(model_name.lower())
+
+        def check_match(template_name):
+            if isinstance(template_name, list):
+                return any(normalize(name) in normalized_model_name for name in template_name)
+            return normalize(template_name) in normalized_model_name
+
         matched_template = max(
             (
-                (template, len(normalize(template["name"])))
+                (template, len(normalize(template["name"] if isinstance(template["name"], str) else template["name"][0])))
                 for template in self.templates.values()
-                if normalize(template["name"]) in normalized_model_name
+                if check_match(template["name"])
             ),
             key=lambda x: x[1],
-            default=(None, 0),
+            default=(None, 0)
         )[0]
 
         return matched_template if matched_template else self.templates[1]
@@ -153,7 +204,6 @@ class LLMProcessor:
 
     def _get_token_count(self, content):
         payload = {"prompt": content, "genkey": self.genkey}
-
         return self._call_api("tokencount", payload)
 
 
@@ -220,17 +270,14 @@ def clean_string(data):
         last_period = data.rfind('.')
         if last_period != -1:
             data = data[:last_period+1]
-
     return data
 
 def clean_json(data):
     if data is None:
-
         return ""
     if isinstance(data, dict):
         data = json.dumps(data)
         try:
-
             return json.loads(data)
         except:
             pass
@@ -249,18 +296,81 @@ def clean_json(data):
     data = re.sub(r'["""]', '"', data)
 
     try:
-
         return json.loads(repair_json(data))
     except json.JSONDecodeError:
         print("JSON error")
+    return data
 
-        return data
 
 class FileProcessor:
     def __init__(self, config, llm_processor):
         self.config = config
         self.llm_processor = llm_processor
+        self.max_megapixels = 16
+        self.target_megapixels = 8
+
+    def process_file(self, file_path, exif_metadata, mime_type):
+        self.mime_type = mime_type
+        image_data = self.prepare_image_for_api(file_path)
+        if image_data is None:
+            print(f"Skipping {file_path}: Not a supported image type")
+            return None
+
+        self.caption = clean_string(self.llm_processor.interrogate_image(image_data))
+        description = self.create_metadata_prompt(exif_metadata, self.caption)
+        instruction = self.llm_processor.metadata_instruction
+        llm_metadata = clean_json(
+            self.llm_processor.describe_content(
+                instruction=instruction, content=description
+            )
+        )
+
+        self.update_xmp_tags(file_path, llm_metadata)
+        return {"llm_metadata": llm_metadata, "Caption": self.caption}
+
+    """Looks at each file to determine if it is an image by mimetype.
+
+    If so it will check if it is JPEG or PNG, and if not looks for an embedded
+    jpeg file (as in RAW files).
+    """
+
+    def prepare_image_for_api(self, file_path):
+        if self.mime_type in ['image/jpeg', 'image/png']:
+            return file_path
+        else:
+            with exiftool.ExifToolHelper() as et:
+                metadata = et.get_metadata(file_path)[0]
+                if 'JPEG:JPEGInterchangeFormat' in metadata:
+                    embedded_jpeg = et.get_embedded_jpeg(file_path)
+                    if embedded_jpeg:
+                        return io.BytesIO(embedded_jpeg)
+            return self.process_image(file_path)
+        return None
+
+    """Scales the image down if it is really big, then converts to
     
+    RGB then JPEG. It is kept in memory the whole time to avoid writing to disk
+    """    
+
+    def process_image(self, file_path):
+        with Image.open(file_path) as img:
+            width, height = img.size
+            megapixels = (width * height) / 1_000_000
+
+            if megapixels > self.max_megapixels:
+                scale_factor = (self.target_megapixels / megapixels) ** 0.5
+                new_width = int(width * scale_factor)
+                new_height = int(height * scale_factor)
+                img = img.resize((new_width, new_height), Image.LANCZOS)
+
+            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                img = img.convert('RGB')
+
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=95)
+            buffer.seek(0)
+            return buffer
+            
     def update_xmp_tags(self, file_path, llm_metadata):
         try:
             with exiftool.ExifToolHelper() as et:
@@ -297,19 +407,6 @@ class FileProcessor:
         except Exception as e:
             print(f"Error updating XMP tags for {file_path}: {str(e)}")
 
-    def process_file(self, file_path, exif_metadata):
-        self.caption = clean_string(self.llm_processor.interrogate_image(file_path))
-        description = self.create_metadata_prompt(exif_metadata, self.caption)
-        instruction = self.llm_processor.metadata_instruction
-        llm_metadata = clean_json(
-            self.llm_processor.describe_content(
-                instruction=instruction, content=description
-            )
-        )
-
-        self.update_xmp_tags(file_path, llm_metadata)
-
-        return {"llm_metadata": llm_metadata, "Caption": self.caption}
 
     def extract_basic_metadata(self, file_path, root_dir):
         path = pathlib.Path(file_path)
@@ -387,12 +484,12 @@ class DatabaseHandler:
 
         return False
 
+
 class IndexManager:
     def __init__(self, config, db_handler, file_processor):
         self.config = config
         self.db_handler = db_handler
         self.file_processor = file_processor
-        self.images_ext = [".jpg", ".jpeg", ".png", ".gif", ".tiff"]
 
     def crawl_directory(self):
         if not self.config.no_crawl:
@@ -408,22 +505,31 @@ class IndexManager:
     def index_files(self, check_paused_or_stopped):
         for file_path in self.crawl_directory():
             if check_paused_or_stopped:
-                check_paused_or_stopped()  # Check if paused or stopped
-            file_mtime = os.path.getmtime(file_path)
-            if os.path.splitext(file_path.lower())[1] in self.images_ext:
+                check_paused_or_stopped()
+
+            mime_type, _ = mimetypes.guess_type(file_path)
+            
+            if mime_type and mime_type.startswith('image/'):
+                file_mtime = os.path.getmtime(file_path)
+                
                 if self.config.force_rehash or self.db_handler.file_needs_update(file_path, file_mtime):
                     basic_metadata = self.file_processor.extract_basic_metadata(file_path, self.config.directory)
                     exif_metadata = self.file_processor.extract_exif_metadata(file_path)
-                    processed_metadata = self.file_processor.process_file(file_path, exif_metadata)
-                    combined_metadata = {**basic_metadata, **exif_metadata, **processed_metadata}
-                    if not self.config.dry_run:
-                        self.db_handler.insert_or_update(combined_metadata)
-
-                    yield combined_metadata
+                    
+                    processed_metadata = self.file_processor.process_file(file_path, exif_metadata, mime_type)
+                    
+                    if processed_metadata is not None:
+                        combined_metadata = {**basic_metadata, **exif_metadata, **processed_metadata}
+                        if not self.config.dry_run:
+                            self.db_handler.insert_or_update(combined_metadata)
+                        yield combined_metadata
+                    else:
+                        print(f"Skipping {file_path}: File processing failed")
                 else:
-                    pass
+                    print(f"Skipping {file_path}: Up to date")
             else:
-                pass
+                print(f"Skipping {file_path}: Not an image file")
+                
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
