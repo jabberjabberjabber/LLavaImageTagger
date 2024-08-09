@@ -86,7 +86,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 
 For all platforms, the script will set up the Python environment, install dependencies, and download necessary model weights (6GB total). This initial setup is performed only once and will take a few minutes depending on your download speed.
 
-![LLMImageIndexer Screenshot](caption.png)
+![LLMImageIndexer Screenshot](capture.PNG)
 
 ## Usage
 
