@@ -1,6 +1,8 @@
 import sys
 import os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog, QTextEdit, QGroupBox, QSpinBox
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog, 
+                             QTextEdit, QGroupBox, QSpinBox, QRadioButton, QButtonGroup)
 from PyQt6.QtCore import QThread, pyqtSignal, QObject
 
 import llmii
@@ -15,17 +17,26 @@ class IndexerThread(QThread):
         self.stopped = False
 
     def run(self):
-        llmii.main(self.config, self.output_received.emit, self.check_paused_or_stopped)
+        try:
+            llmii.main(self.config, self.output_received.emit, self.check_paused_or_stopped)
+        except Exception as e:
+            self.output_received.emit(f"Error: {str(e)}")
 
     def check_paused_or_stopped(self):
-        while self.paused and not self.stopped:
-            self.msleep(100)
         if self.stopped:
             raise Exception("Indexer stopped by user")
+        if self.paused:
+            while self.paused and not self.stopped:
+                self.msleep(100)
+            # After unpausing, check again if we've been stopped
+            if self.stopped:
+                raise Exception("Indexer stopped by user")
+        return self.paused
 
 class PauseHandler(QObject):
     pause_signal = pyqtSignal(bool)
     stop_signal = pyqtSignal()
+
 
 class ImageIndexerGUI(QMainWindow):
     def __init__(self):
@@ -68,11 +79,9 @@ class ImageIndexerGUI(QMainWindow):
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout()
         self.no_crawl_checkbox = QCheckBox("Don't crawl subdirectories")
-        self.force_rehash_checkbox = QCheckBox("Redo (files will have checked metadata cleared and regenerated)")
         self.overwrite_checkbox = QCheckBox("Don't make backups before writing")
         self.dry_run_checkbox = QCheckBox("Pretend mode (see what happens without writing)")
         options_layout.addWidget(self.no_crawl_checkbox)
-        options_layout.addWidget(self.force_rehash_checkbox)
         options_layout.addWidget(self.overwrite_checkbox)
         options_layout.addWidget(self.dry_run_checkbox)
         options_group.setLayout(options_layout)
@@ -81,27 +90,39 @@ class ImageIndexerGUI(QMainWindow):
         xmp_group = QGroupBox("Metadata Tags to Generate")
         xmp_layout = QVBoxLayout()
         
-        keywords_layout = QHBoxLayout()
-        self.keywords_checkbox = QCheckBox("Keywords")
+        # Keywords radio buttons
+        keywords_layout = QVBoxLayout()
+        self.keywords_radio_group = QButtonGroup(self)
+        
+        self.no_keywords_radio = QRadioButton("Don't modify keywords")
+        self.write_keywords_radio = QRadioButton("Clear existing and write new keywords")
+        self.update_keywords_radio = QRadioButton("Update existing keywords")
+        
+        self.keywords_radio_group.addButton(self.no_keywords_radio)
+        self.keywords_radio_group.addButton(self.write_keywords_radio)
+        self.keywords_radio_group.addButton(self.update_keywords_radio)
+        
+        keywords_layout.addWidget(self.no_keywords_radio)
+        keywords_layout.addWidget(self.write_keywords_radio)
+        keywords_layout.addWidget(self.update_keywords_radio)
+        
+        # Set default selection
+        self.no_keywords_radio.setChecked(True)
+        
+        keywords_count_layout = QHBoxLayout()
         self.keywords_count = QSpinBox()
         self.keywords_count.setMinimum(1)
         self.keywords_count.setMaximum(50)
         self.keywords_count.setValue(7)
+        keywords_count_layout.addWidget(QLabel("Number of keywords to generate:"))
+        keywords_count_layout.addWidget(self.keywords_count)
         
-        keywords_layout.addWidget(self.keywords_checkbox)
-        keywords_layout.addWidget(QLabel("How many keywords?\n(More will decrease speed)"))
-        keywords_layout.addWidget(self.keywords_count)
+        keywords_layout.addLayout(keywords_count_layout)
         
-        self.subject_checkbox = QCheckBox("Subject")
-        self.title_checkbox = QCheckBox("Title")
-        self.description_checkbox = QCheckBox("Description")
-        self.caption_checkbox = QCheckBox("Caption")
-        xmp_layout.addWidget(self.title_checkbox)
-        xmp_layout.addWidget(self.subject_checkbox)
+        self.description_checkbox = QCheckBox("Generate caption and put in XMP:Description/IPTC:Caption-Abstract/EXIF:ImageDescription")
         
-        xmp_layout.addWidget(self.caption_checkbox)
-        xmp_layout.addWidget(self.description_checkbox)
         xmp_layout.addLayout(keywords_layout)
+        xmp_layout.addWidget(self.description_checkbox)
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
         
@@ -140,15 +161,20 @@ class ImageIndexerGUI(QMainWindow):
         config.api_url = self.api_url_input.text()
         config.api_password = self.api_password_input.text()
         config.no_crawl = self.no_crawl_checkbox.isChecked()
-        config.force_rehash = self.force_rehash_checkbox.isChecked()
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
-        config.write_keywords = self.keywords_checkbox.isChecked()
+        if self.write_keywords_radio.isChecked():
+            config.write_keywords = True
+            config.update_keywords = False
+        elif self.update_keywords_radio.isChecked():
+            config.write_keywords = False
+            config.update_keywords = True
+        else:  
+            config.write_keywords = False
+            config.update_keywords = False
+
         config.keywords_count = self.keywords_count.value()
-        config.write_title = self.title_checkbox.isChecked()
-        config.write_subject = self.subject_checkbox.isChecked()
-        config.write_description = self.description_checkbox.isChecked()
-        config.write_caption = self.caption_checkbox.isChecked()
+        config.write_caption = self.description_checkbox.isChecked()
         config.image_instruction = self.image_instruction_input.text()
 
 

@@ -1,6 +1,5 @@
 tinydb
 pyexiftool
-xxhash
 json_repair
 requests
 pyqt6
