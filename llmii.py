@@ -14,6 +14,7 @@ import threading
 from json_repair import repair_json
 import json
 import time
+from pathlib import Path
 
 """
 def pil_ensure_rgb(image: Image.Image) -> Image.Image:
@@ -108,10 +109,9 @@ class Config:
         return config
 
 class QueueManager:
-    def __init__(self, batch_size=1, max_queue_size=100):
+    def __init__(self, max_queue_size=1000):
         self.indexing_queue = deque(maxlen=max_queue_size)
         self.processing_queue = deque(maxlen=max_queue_size)
-        self.batch_size = batch_size
         self.lock = threading.Lock()
 
     def add_to_indexing_queue(self, item):
@@ -359,16 +359,17 @@ class LLMProcessor:
         return self._call_api("tokencount", payload)
 
 class FileProcessor:
-    def __init__(self, config, queue_manager, image_processor, check_paused_or_stopped, callback):
+    def __init__(self, config, check_paused_or_stopped, callback):
         self.config = config
-        self.queue_manager = queue_manager
-        self.image_processor = image_processor
+        self.queue_manager = QueueManager(max_queue_size=1000)
+        self.image_processor = ImageProcessor()
         self.llm_processor = LLMProcessor(config)
         self.logger = logging.getLogger(__name__)
         self.check_paused_or_stopped = check_paused_or_stopped
         self.files_progress_remaining = 0
         self.files_progress_completed = 0
         self.callback = callback
+        self.directory = Path(config.directory)
         self.exiftool_fields = [
             "FileName", "Directory", "FileType", "MIMEType",
             "DateTimeOriginal", "Caption-abstract", "UserComments",
@@ -391,22 +392,31 @@ class FileProcessor:
                 file_extension = os.path.splitext(filename)[1].lower()
                 if file_extension in self.file_extensions:
                     files.append(file_path)
-        
-        self.files_progress_remaining += len(files)
+        if files:
+            self.files_progress_remaining += len(files)
         if self.callback:
             self.callback(f"Files to process: {self.files_progress_remaining}")
         return files         
 
     def process_directory(self, directory):
-        files_to_process = self.list_files(directory)
         with exiftool.ExifToolHelper() as et:
             try:
-                metadata_list = et.get_tags(
-                    files_to_process,
-                    self.exiftool_fields
-                )
-                for metadata in metadata_list:
-                    self.queue_manager.add_to_indexing_queue(metadata)
+                for file_extension in self.file_extensions:
+                    files = list(directory.glob(f"*{file_extension}"))
+                    for file_path in files:
+                        if self.check_paused_or_stopped():
+                            return
+                        try:
+                            metadata = et.get_metadata(str(file_path))
+                            if metadata:
+                                # Add only the first (and only) item in the metadata list
+                                self.queue_manager.add_to_indexing_queue(metadata[0])
+                                self.files_progress_remaining += 1
+                        except Exception as e:
+                            self.logger.error(f"Error processing file {file_path}: {str(e)}")
+
+                if self.callback:
+                    self.callback(f"Files to process: {self.files_progress_remaining}")
             except Exception as e:
                 self.logger.error(f"Error processing directory {directory}: {str(e)}")
 
@@ -424,12 +434,12 @@ class FileProcessor:
                 
                 #self.files_progress_remaining -= 1
                 self.files_progress_completed += 1
-                if self.callback:
-                    self.callback(f"Completed processing file {self.files_progress_completed} of {self.files_progress_remaining}\n")
+                #if self.callback:
+                 #   self.callback(f"Completed processing file {self.files_progress_completed} of {self.files_progress_remaining}\n")
         except Exception as e:
             self.logger.error(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
-            if self.callback:
-                self.callback(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
+            #if self.callback:
+             #   self.callback(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
 
     def update_metadata(self, metadata, base64_image):
         """ clean_string and clean_json are vital here to ensure useable output
@@ -485,7 +495,8 @@ class FileProcessor:
             self.logger.error(f"Error updating metadata for {metadata.get('SourceFile', 'unknown')}: {str(e)}")
 
     def run(self):
-        directories = [self.config.directory] if self.config.no_crawl else self.get_subdirectories()
+        directories = [self.directory] if self.config.no_crawl else list(self.directory.rglob('*'))
+        directories = [d for d in directories if d.is_dir()]
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
             executor.map(self.process_directory, directories)
         while not self.queue_manager.all_queues_empty():
@@ -496,9 +507,6 @@ class FileProcessor:
             item = self.queue_manager.get_indexing_item()
             if item:
                 self.process_file(item)
-            
-        if self.callback:
-            self.callback("All files processed.")
             
     def get_subdirectories(self):
         return [root for root, _, _ in os.walk(self.config.directory)]
@@ -512,13 +520,13 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
 
     logger.info("Initializing components...")
 
-    queue_manager = QueueManager(batch_size=1, max_queue_size=100)
+    queue_manager = QueueManager(max_queue_size=1000)
     image_processor = ImageProcessor()
     
-    file_processor = FileProcessor(config, queue_manager, image_processor, check_paused_or_stopped, callback)
+    file_processor = FileProcessor(config, check_paused_or_stopped, callback)
 
     logger.info("Starting file processing...")
-
+    
     try:
         file_processor.run()
         
@@ -534,6 +542,11 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
     
     finally:
         logger.info("Process finished.")
+        
+def output_handler(message):
+        print(message)  # Always print to console
+        if callback:
+            callback(message)  # Send to GUI if callback is provided
 
 if __name__ == "__main__":
     main()

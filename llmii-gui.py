@@ -94,32 +94,32 @@ class ImageIndexerGUI(QMainWindow):
         keywords_layout = QVBoxLayout()
         self.keywords_radio_group = QButtonGroup(self)
         
-        self.no_keywords_radio = QRadioButton("Don't modify keywords")
+        #self.no_keywords_radio = QRadioButton("Don't modify keywords")
         self.write_keywords_radio = QRadioButton("Clear existing and write new keywords")
         self.update_keywords_radio = QRadioButton("Update existing keywords")
         
-        self.keywords_radio_group.addButton(self.no_keywords_radio)
+        #self.keywords_radio_group.addButton(self.no_keywords_radio)
         self.keywords_radio_group.addButton(self.write_keywords_radio)
         self.keywords_radio_group.addButton(self.update_keywords_radio)
         
-        keywords_layout.addWidget(self.no_keywords_radio)
+        #keywords_layout.addWidget(self.no_keywords_radio)
         keywords_layout.addWidget(self.write_keywords_radio)
         keywords_layout.addWidget(self.update_keywords_radio)
         
         # Set default selection
-        self.no_keywords_radio.setChecked(True)
+        self.update_keywords_radio.setChecked(True)
         
         keywords_count_layout = QHBoxLayout()
         self.keywords_count = QSpinBox()
         self.keywords_count.setMinimum(1)
         self.keywords_count.setMaximum(50)
         self.keywords_count.setValue(7)
-        keywords_count_layout.addWidget(QLabel("Number of keywords to generate:"))
+        keywords_count_layout.addWidget(QLabel("Number of keywords to generate: "))
         keywords_count_layout.addWidget(self.keywords_count)
         
         keywords_layout.addLayout(keywords_count_layout)
         
-        self.description_checkbox = QCheckBox("Generate caption and put in XMP:Description/IPTC:Caption-Abstract/EXIF:ImageDescription")
+        self.description_checkbox = QCheckBox("Generate and set description?")
         
         xmp_layout.addLayout(keywords_layout)
         xmp_layout.addWidget(self.description_checkbox)
@@ -155,7 +155,6 @@ class ImageIndexerGUI(QMainWindow):
             self.dir_input.setText(directory)
 
     def run_indexer(self):
-        # Create a Config object based on GUI inputs
         config = llmii.Config()
         config.directory = self.dir_input.text()
         config.api_url = self.api_url_input.text()
@@ -169,16 +168,11 @@ class ImageIndexerGUI(QMainWindow):
         elif self.update_keywords_radio.isChecked():
             config.write_keywords = False
             config.update_keywords = True
-        else:  
-            config.write_keywords = False
-            config.update_keywords = False
 
         config.keywords_count = self.keywords_count.value()
         config.write_caption = self.description_checkbox.isChecked()
         config.image_instruction = self.image_instruction_input.text()
 
-
-        # Run the indexer in a separate thread
         self.indexer_thread = IndexerThread(config)
         self.indexer_thread.output_received.connect(self.update_output)
         self.indexer_thread.finished.connect(self.indexer_finished)
