@@ -401,22 +401,26 @@ class FileProcessor:
     def process_directory(self, directory):
         with exiftool.ExifToolHelper() as et:
             try:
-                for file_extension in self.file_extensions:
-                    files = list(directory.glob(f"*{file_extension}"))
-                    for file_path in files:
-                        if self.check_paused_or_stopped():
-                            return
-                        try:
-                            metadata = et.get_metadata(str(file_path))
-                            if metadata:
-                                # Add only the first (and only) item in the metadata list
-                                self.queue_manager.add_to_indexing_queue(metadata[0])
-                                self.files_progress_remaining += 1
-                        except Exception as e:
-                            self.logger.error(f"Error processing file {file_path}: {str(e)}")
+                files = []
+                for filename in os.listdir(directory):
+                    file_path = os.path.join(directory, filename)
+                    if os.path.isfile(file_path):
+                        file_extension = os.path.splitext(filename)[1].lower()
+                        if file_extension in self.file_extensions:                      
+                            metadata_list = et.get_tags(
+                                file_path,
+                                self.exiftool_fields
+                            )
+                        for metadata in metadata_list:
+                            
+                            self.queue_manager.add_to_indexing_queue(metadata)
+                            
+                            self.files_progress_remaining += 1
+                            if self.callback:
+                                self.callback(f"Files to process: {self.files_progress_remaining}")
+                                
+               
 
-                if self.callback:
-                    self.callback(f"Files to process: {self.files_progress_remaining}")
             except Exception as e:
                 self.logger.error(f"Error processing directory {directory}: {str(e)}")
 
@@ -434,8 +438,8 @@ class FileProcessor:
                 
                 #self.files_progress_remaining -= 1
                 self.files_progress_completed += 1
-                #if self.callback:
-                 #   self.callback(f"Completed processing file {self.files_progress_completed} of {self.files_progress_remaining}\n")
+                if self.callback:
+                    self.callback(f"Completed processing file {self.files_progress_completed} of {self.files_progress_remaining}\n")
         except Exception as e:
             self.logger.error(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
             #if self.callback:
