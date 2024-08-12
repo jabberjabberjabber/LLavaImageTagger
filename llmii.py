@@ -200,10 +200,12 @@ class ImageProcessor:
         try:
             if image_type in ['png', 'jpeg', 'jpg', 'jpe']:
                 return self.process_image(file_path, image_type)
+            
             if jpeg_inside:
                 embedded_jpeg = self.extract_embedded_jpeg(file_path)
                 return self.process_image(io.BytesIO(embedded_jpeg), 'jpeg')
-            return self.process_image(file_path, 'convert')
+            return self.process_image(file_path, 'convert')    
+            #return self.handle_raw_file(file_path)
         except Exception as e:
             self.logger.error(f"Error processing image {file_path}: {str(e)}")
         return None
@@ -224,9 +226,11 @@ class ImageProcessor:
             return None
 
     def extract_embedded_jpeg(self, file_path):
+        """ Use exiftool to grab an embedded Jpeg from a raw file.
+            Seems to only work on some of them.
+        """
         try:
             with exiftool.ExifTool() as et:
-                # raw_bytes is important or else we get a string 
                 raw_image = et.execute("-b", "-JpgFromRaw", file_path, raw_bytes=True)
                 if raw_image:
                     return raw_image
@@ -236,6 +240,23 @@ class ImageProcessor:
         except Exception as e:
             self.logger.error(f"Error extracting embedded JPEG from {file_path}: {str(e)}")
             return None
+
+    def handle_raw_file(self, file_path):
+        """ For raw files we can't pull a jpeg out of,
+            we just convert to JPEG and call it a day.
+        """
+        
+        try:
+            with rawpy.imread(file_path) as raw:
+                rgb = raw.postprocess()
+                img = Image.fromarray(rgb)
+                buffer = io.BytesIO()
+                img.save(buffer, format="JPEG", quality=95)
+                buffer.seek(0)
+            return self.process_image(buffer, 'convert')
+        except Exception as e:
+            self.logger.error(f"Error processing raw image with RawPy: {str(e)}")
+            return None          
             
 class LLMProcessor:
     def __init__(self, config):
@@ -262,6 +283,9 @@ class LLMProcessor:
             "Authorization": f"Bearer {config.api_password}",
         }
         self.genkey = self._create_genkey()
+        
+        # you may have to add an entry name for a finetune with
+        # a different name than its base
         self.templates = {
             1: {"name": "Alpaca", "user": "\n\n### Instruction:\n\n", "assistant": "\n\n### Response:\n\n", "system": ""},
             2: {"name": ["Vicuna", "Wizard", "ShareGPT", "Qwen"], "user": "### Human: ", "assistant": "\n### Assistant: ", "system": ""},
@@ -403,10 +427,12 @@ class LLMProcessor:
             query.
         """
         return f"KCPP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
-
+    
+    #unused by the script but functional
     def _get_max_context_length(self):
         return self._call_api("max_context_length")
 
+    #unused by the script but functional
     def _get_token_count(self, content):
         payload = {"prompt": content, "genkey": self.genkey}
         return self._call_api("tokencount", payload)
@@ -414,8 +440,6 @@ class LLMProcessor:
 class FileProcessor:
     def __init__(self, config, image_processor, check_paused_or_stopped, callback):
         self.config = config
-        #self.queue_manager = queue_manager
-        #self.db_handler = db_handler
         self.image_processor = image_processor
         self.llm_processor = LLMProcessor(config)
         self.logger = logging.getLogger(__name__)
@@ -423,6 +447,8 @@ class FileProcessor:
         self.callback = callback
         self.files_in_queue = 0
         self.files_done = 0
+        
+        # add more tags here if needed
         self.exiftool_fields = [
             "FileName", "Directory", "FileType", "MIMEType",
             "DateTimeOriginal", "Caption-abstract", "UserComments",
@@ -430,7 +456,21 @@ class FileProcessor:
             "Subject", "Keywords", "Make", "Model",
             "LensModel", "Artist", "Copyright", "JPGFromRaw",
         ]
-        self.file_extensions = [".jpg", ".jpeg", ".png", ".nef", ".webp", ".jfif", ".tiff", ".tif", ".psd", ".gif"]
+        
+        # add more extensions here if needed
+        self.file_extensions = [
+            ".jpg", ".jpeg", ".png", ".nef", ".webp", ".jfif", ".tiff", ".tif", ".gif"] 
+            #".arw", ".cr2", ".cr3", ".orf", ".raf", ".rw2", ".dng", ".pef", ".srw"
+        
+        
+    def check_pause_stop(self):
+        if self.check_paused_or_stopped():
+            while self.check_paused_or_stopped():
+                time.sleep(0.1)
+            if self.check_paused_or_stopped():
+                return True
+        return False
+        
     def list_files(self, directory):
             files = []
             for filename in os.listdir(directory):
@@ -456,6 +496,8 @@ class FileProcessor:
         except Exception as e:
             self.logger.error(f"Error processing directory {directory}: {str(e)}")
         for metadata in metadata_list:
+            if self.check_pause_stop():
+                return
             self.process_file(metadata)
         
                 
@@ -470,6 +512,8 @@ class FileProcessor:
             # if there is an entry for jpegfromraw then there is an embedded jpeg 
             embedded_jpeg_exists = any('jpgfromraw' in key.lower() for key in metadata)
             base64_image = self.image_processor.route_image(file_path, image_type, embedded_jpeg_exists)
+            if self.check_pause_stop():
+                return
             if base64_image:
                 self.update_metadata(metadata, base64_image)
                 self.files_done += 1
@@ -477,39 +521,44 @@ class FileProcessor:
         except Exception as e:
             self.logger.error(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
 
+    def process_keywords(self, metadata, llm_metadata):
+        """ Check if update is configured, if so combine the old and new
+            keywords into a set to deduplicate them 
+        """
+        all_keywords = set(llm_metadata.get("Keywords", []))
+        
+        if self.config.update_keywords:
+            keywords = metadata.get("IPTC:Keywords", [])
+            subject = metadata.get("XMP:Subject", [])
+            all_keywords.update(subject)
+            all_keywords.update(keywords)
+        return list(all_keywords)
+    
     def update_metadata(self, metadata, base64_image):
         """ clean_string and clean_json are vital here to ensure useable output
-            from the LLM. If the are ommitted we will no get a json object and
+            from the LLM. If they are ommitted we will not get a json object and
             everything will break.
             We query the LLM twice. Once with the image asking for a description,
             and a second time with the description and the metadata asking
             for a JSON object.
         """        
         try:
-            file_path = metadata['SourceFile']
+            file_path = metadata["SourceFile"]
+        
             caption = clean_string(self.llm_processor.interrogate_image(base64_image))
             llm_metadata = clean_json(self.llm_processor.describe_content(metadata, caption))
-        
+            
             with exiftool.ExifToolHelper() as et:
-                xmp_metadata = {}
-                if self.config.update_keywords and "Keywords" in llm_metadata:
-                    updated_keywords = llm_metadata["Keywords"]
-                    if isinstance(metadata.get("Keywords"), list):
-                        updated_keywords.extend(metadata.get("Keywords"))
-                         
-                    if isinstance(metadata.get("Subject"), list):
-                        updated_keywords.extend(metadata.get("Subject"))
-                        
-                    xmp_metadata["MWG:Keywords"] = updated_keywords    
-                    
-                elif self.config.write_keywords and "Keywords" in llm_metadata:
-                    xmp_metadata["Keywords"] = ""
-                    xmp_metadata["Subject"] = ""
-                    xmp_metadata["MWG:Keywords"] = llm_metadata["Keywords"]
+                xmp_metadata = {}        
                 
+                if llm_metadata["Keywords"]:
+                    xmp_metadata["IPTC:Keywords"] = ""
+                    xmp_metadata["XMP:Subject"] = ""
+                    xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
+            
                 # MWG is metadata working group. This will sync the tags across
                 # EXIF, IPTC, and XMP
-                if self.config.write_caption:
+                if self.config.write_caption and llm_metadata['Summary']:
                     xmp_metadata["MWG:Description"] = llm_metadata["Summary"]
                     
                 if not self.config.dry_run:
@@ -553,6 +602,9 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
         directories = [root for root, _, _ in os.walk(config.directory)]
         
         for directory in directories:
+            if check_paused_or_stopped and check_paused_or_stopped():
+                logger.info("Processing stopped by user.")
+                break
             try:
                 file_processor.process_directory(directory)
             except:
