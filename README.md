@@ -13,8 +13,8 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - **Local Processing**: All processing is done locally on your machine.
 - **Flexible Configuration**: Options include number of keywords, update or write clean, custom prompt, description generation and directory traversal.
 - **User-Friendly GUI**: Includes a GUI and installer. Relies on Koboldcpp, a single executable, for all AI functionality. No Python dependency hell!  
-- **Multi-Format Support**: Handles a wide range of image formats, including JPEG, PNG, TIFF, RAW.
-- **GPU Acceleration**: Will use Apple Metal or Nvidia CUDA capable hardware if available to greatly speed inference.
+- **Multi-Format Support**: Handles a wide range of image formats, including JPEG, PNG, TIFF, NEF, WEBP.
+- **GPU Acceleration**: Will use Apple Metal, Nvidia CUDA, or AMD (Vulkan) hardware if available to greatly speed inference.
 - **Cross-Platform**: Supports Windows, macOS (including ARM), and Linux.
 
 ## Installation
@@ -31,13 +31,9 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 
 2. Install [Python for Windows](https://www.python.org/downloads/windows/).
 
-3. Install ExifTool:
-   - Option 1: Use the [installer](https://oliverbetz.de/cms/files/Artikel/ExifTool-for-Windows/ExifTool_install_12.89_64.exe)
-   - Option 2: Download the [executable](https://exiftool.org/install.html#Windows), extract it, and place it in the LLMImageIndexer folder
-
-4. Download [KoboldCPP.exe](https://github.com/LostRuins/koboldcpp/releases) and place it in the LLMImageIndexer folder. If it is not named KoboldCPP.exe, rename it to KoboldCPP.exe 
+3. Download [KoboldCPP.exe](https://github.com/LostRuins/koboldcpp/releases) and place it in the LLMImageIndexer folder. If it is not named KoboldCPP.exe, rename it to KoboldCPP.exe 
 ![LLMImageIndexer Screenshot](Capture.PNG)
-5. Run `llmii-run.bat` and wait for the model weights to download and KoboldCPP to start. The one of the terminal windows will say ```Please connect to custom endpoint at http://localhost:5001``` when it is ready.
+4. Run `llmii-run.bat` and wait for the model weights to download and KoboldCPP to start. The one of the terminal windows will say ```Please connect to custom endpoint at http://localhost:5001``` when it is ready.
 
 ### macOS Installation (including ARM)
 
@@ -94,7 +90,7 @@ For all platforms, the script will set up the Python environment, install depend
    ```
 
 2. Launch the LLMImageIndexer GUI:
-   - On Windows: Run `python llmii-gui.py`
+   - On Windows: Run `llmii-run.bat`
    - On macOS/Linux: Run `python3 llmii-gui.py`
 
 3. Configure the indexing settings in the GUI:
