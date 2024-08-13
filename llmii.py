@@ -343,7 +343,7 @@ class FileProcessor:
         
         # add more extensions here if needed
         self.file_extensions = {
-            ".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff"
+            ".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff",
             ".jpg", ".nef", ".orf", ".pef", ".png", ".raf", ".rw2", ".srw"
             }
         
