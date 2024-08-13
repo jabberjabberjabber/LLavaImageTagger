@@ -7,13 +7,13 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 ![LLMImageIndexer Screenshot](screenshot-llmii.png)
 
 ## Features
-
+ 
 - **Intelligent Image Analysis**: Utilizes a local AI model to generate a variable number of keywords and a description for each image.
 - **Metadata Enhancement**: Can automatically edit image metadata with generated tags.
 - **Local Processing**: All processing is done locally on your machine.
+- **Multi-Format Support**: Handles a wide range of image formats, including all major raw camera files: arw cr2 dng gif jpeg tif tiff jpg nef orf pef png raf rw2 srw
 - **Flexible Configuration**: Options include number of keywords, update or write clean, custom prompt, description generation and directory traversal.
-- **User-Friendly GUI**: Includes a GUI and installer. Relies on Koboldcpp, a single executable, for all AI functionality. No Python dependency hell!  
-- **Multi-Format Support**: Handles a wide range of image formats, including JPEG, PNG, TIFF, NEF, WEBP.
+- **User-Friendly GUI**: Includes a GUI and installer. Relies on Koboldcpp, a single executable, for all AI functionality.  
 - **GPU Acceleration**: Will use Apple Metal, Nvidia CUDA, or AMD (Vulkan) hardware if available to greatly speed inference.
 - **Cross-Platform**: Supports Windows, macOS (including ARM), and Linux.
 
@@ -22,7 +22,6 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 ### Prerequisites
 
 - Python 3.7 or higher
-- ExifTool
 - KoboldCPP
 
 ### Windows Installation
@@ -33,7 +32,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 
 3. Download [KoboldCPP.exe](https://github.com/LostRuins/koboldcpp/releases) and place it in the LLMImageIndexer folder. If it is not named KoboldCPP.exe, rename it to KoboldCPP.exe 
 ![LLMImageIndexer Screenshot](Capture.PNG)
-4. Run `llmii-run.bat` and wait for the model weights to download and KoboldCPP to start. The one of the terminal windows will say ```Please connect to custom endpoint at http://localhost:5001``` when it is ready.
+4. Run `llmii-run.bat` and wait exiftool to install. When it is complete you must start the file again. If you called it from a terminal window you will need to close the windows and reopen it. It will then create a python environment and download the model weights and KoboldCPP to start. The download is quite large (6GB) and there is no progress bar, but it only needs to do this once. Once it is done KoboldCPP will start and one of the terminal windows will say ```Please connect to custom endpoint at http://localhost:5001``` and then it is ready.
 
 ### macOS Installation (including ARM)
 
