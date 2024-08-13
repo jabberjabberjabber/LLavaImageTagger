@@ -1,34 +1,17 @@
 import os
 import logging
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import exiftool
-from tinydb import TinyDB, Query
 import requests
 import base64
 from PIL import Image
 import io
 import random
 import re
-from collections import deque
-import threading
 from json_repair import repair_json
 import json
 import time
-
-"""
-def pil_ensure_rgb(image: Image.Image) -> Image.Image:
-    #from https://github.com/neggles/wdv3-timm/blob/main/wdv3_timm.py
-    # convert to RGB/RGBA if not already (deals with palette images etc.)
-    if image.mode not in ["RGB", "RGBA"]:
-        image = image.convert("RGBA") if "transparency" in image.info else image.convert("RGB")
-    # convert RGBA to RGB with white background
-    if image.mode == "RGBA":
-        canvas = Image.new("RGBA", image.size, (255, 255, 255))
-        canvas.alpha_composite(image)
-        image = canvas.convert("RGB")
-return image
-"""
+import rawpy
 
 def clean_string(data):
     if isinstance(data, dict):
@@ -107,85 +90,7 @@ class Config:
         for key, value in vars(args).items():
             setattr(config, key, value)
         return config
-
-
-class QueueManager:
-    def __init__(self, batch_size=1, max_queue_size=100):
-        self.indexing_queue = deque(maxlen=max_queue_size)
-        self.processing_queue = deque(maxlen=max_queue_size)
-        self.db_write_queue = deque(maxlen=max_queue_size)
-        self.batch_size = batch_size
-        self.lock = threading.Lock()
-
-    def add_to_indexing_queue(self, item):
-        with self.lock:
-            self.indexing_queue.append(item)
-
-    def add_to_processing_queue(self, item):
-        with self.lock:
-            self.processing_queue.append(item)
-
-    def add_to_db_write_queue(self, item):
-        with self.lock:
-            self.db_write_queue.append(item)
-            if len(self.db_write_queue) >= self.batch_size:
-                return self.get_db_write_batch()
-        return None
-
-    def get_indexing_item(self):
-        with self.lock:
-            return self.indexing_queue.popleft() if self.indexing_queue else None
-
-    def get_processing_item(self):
-        with self.lock:
-            return self.processing_queue.popleft() if self.processing_queue else None
-
-    def get_db_write_batch(self):
-        with self.lock:
-            batch = []
-            while self.db_write_queue and len(batch) < self.batch_size:
-                batch.append(self.db_write_queue.popleft())
-            return batch
-
-    def all_queues_empty(self):
-        return not (self.indexing_queue or self.processing_queue or self.db_write_queue)
-
-class DatabaseHandler:
-    def __init__(self, db_path):
-        self.db = TinyDB(db_path)
-        self.logger = logging.getLogger(__name__)
-
-    def insert_or_update(self, metadata):
-        try:
-            File = Query()
-            self.db.upsert(metadata, File.FileName == metadata.get("FileName"))
-            self.logger.info(f"Updated database entry for {metadata.get('FileName')}")
-        except Exception as e:
-            self.logger.error(f"Error updating database: {str(e)}")
-
-    def check_duplicate(self, metadata):
-        try:
-            File = Query()
-            result = self.db.search(
-                (File.FileName == metadata.get("FileName")) &
-                (File.FileSize == metadata.get("FileSize")) &
-                (File.CreateDate == metadata.get("CreateDate"))
-            )
-            return len(result) > 0
-        except Exception as e:
-            self.logger.error(f"Error checking for duplicate: {str(e)}")
-            return False
-
-    def batch_update(self, metadata_list):
-        try:
-            with self.db.batch_write() as batch:
-                for metadata in metadata_list:
-                    File = Query()
-                    batch.upsert(metadata, File.FileName == metadata.get("FileName"))
-            self.logger.info(f"Batch updated {len(metadata_list)} entries")
-        except Exception as e:
-            self.logger.error(f"Error in batch update: {str(e)}")
-
+        
 class ImageProcessor:
     """ The CLIP in the LLM takes a base64 encoded image. It needs
         an RGB JPEG or PNG file. If the image isn't one of these,
@@ -196,69 +101,48 @@ class ImageProcessor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
-    def route_image(self, file_path, image_type, jpeg_inside):
+    def route_image(self, file_path, is_camera_raw):
         try:
-            if image_type in ['png', 'jpeg', 'jpg', 'jpe']:
-                return self.process_image(file_path, image_type)
-            
-            if jpeg_inside:
-                embedded_jpeg = self.extract_embedded_jpeg(file_path)
-                return self.process_image(io.BytesIO(embedded_jpeg), 'jpeg')
-            return self.process_image(file_path, 'convert')    
-            #return self.handle_raw_file(file_path)
+            if is_camera_raw:
+                return self.raw_to_base64_jpeg(file_path)     
+        
         except Exception as e:
-            self.logger.error(f"Error processing image {file_path}: {str(e)}")
-        return None
-
-    def process_image(self, image_to_process, image_type):        
+            self.logger.error(f"Image is raw but unsupported {file_path}: {str(e)}")
+        
+        return self.process_image(file_path)
+    
+    def process_image(self, file_path):
         try:
-            with Image.open(image_to_process) as img:
-                img = img.convert('RGB')
-                buffer = io.BytesIO()
-                if image_type == 'convert':
-                    img.save(buffer, format="JPEG", quality=95)
-                else:
-                    img.save(buffer, format=image_type.upper())
-                buffer.seek(0)
-                return base64.b64encode(buffer.getvalue()).decode("utf-8")
+            with Image.open(file_path) as img:
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                jpeg_bytes = io.BytesIO()
+                img.save(jpeg_bytes, format='JPEG', quality=95)
+                jpeg_bytes.seek(0)
+                base64_encoded = base64.b64encode(jpeg_bytes.getvalue()).decode('utf-8')
+            
+            return base64_encoded
+
         except Exception as e:
             self.logger.error(f"Error processing image: {str(e)}")
             return None
-
-    def extract_embedded_jpeg(self, file_path):
-        """ Use exiftool to grab an embedded Jpeg from a raw file.
-            Seems to only work on some of them.
-        """
-        try:
-            with exiftool.ExifTool() as et:
-                raw_image = et.execute("-b", "-JpgFromRaw", file_path, raw_bytes=True)
-                if raw_image:
-                    return raw_image
-                else:
-                    self.logger.warning(f"No embedded JPEG found in {file_path}")
-                    return None
-        except Exception as e:
-            self.logger.error(f"Error extracting embedded JPEG from {file_path}: {str(e)}")
-            return None
-
-    def handle_raw_file(self, file_path):
-        """ For raw files we can't pull a jpeg out of,
-            we just convert to JPEG and call it a day.
-        """
-        
+    
+    def raw_to_base64_jpeg(self, file_path):
         try:
             with rawpy.imread(file_path) as raw:
                 rgb = raw.postprocess()
-                img = Image.fromarray(rgb)
-                buffer = io.BytesIO()
-                img.save(buffer, format="JPEG", quality=95)
-                buffer.seek(0)
-            return self.process_image(buffer, 'convert')
+            img = Image.fromarray(rgb)
+            jpeg_bytes = io.BytesIO()
+            img.save(jpeg_bytes, format='JPEG', quality=95)
+            jpeg_bytes.seek(0)
+            base64_encoded = base64.b64encode(jpeg_bytes.getvalue()).decode('utf-8')
+            return base64_encoded
         except Exception as e:
-            self.logger.error(f"Error processing raw image with RawPy: {str(e)}")
-            return None          
-            
-class LLMProcessor:
+            self.logger.error(f"Error processing {file_path}: {str(e)}")
+            return None
+
+class LLMProcessor:    
     def __init__(self, config):
         self.config = config
         self.api_function_urls = {
@@ -324,9 +208,9 @@ class LLMProcessor:
             print(f"Error calling API: {str(e)}")
             return None
 
-    def interrogate_image(self, base64_image):
+    def interrogate_image(self, base64_image):       
         """ Changing these sampler settings is not recommended.
-        """
+        """         
         prompt = self.get_prompt(self.image_instruction)
         payload = {
             "prompt": prompt,
@@ -418,7 +302,7 @@ class LLMProcessor:
         assistant_part = self.model["assistant"]
         end_part = self.model.get("endTurn", "")
         prompt = f"{user_part}{instruction}{content}{end_part}{assistant_part}"
-        print(f"Querying LLM with prompt:\n{prompt}")
+        #print(f"Querying LLM with prompt:\n{prompt}")
         return prompt
 
     @staticmethod
@@ -446,7 +330,7 @@ class FileProcessor:
         self.check_paused_or_stopped = check_paused_or_stopped
         self.callback = callback
         self.files_in_queue = 0
-        self.files_done = 0
+        self.files_done = 1
         
         # add more tags here if needed
         self.exiftool_fields = [
@@ -458,11 +342,19 @@ class FileProcessor:
         ]
         
         # add more extensions here if needed
-        self.file_extensions = [
-            ".jpg", ".jpeg", ".png", ".nef", ".webp", ".jfif", ".tiff", ".tif", ".gif"] 
-            #".arw", ".cr2", ".cr3", ".orf", ".raf", ".rw2", ".dng", ".pef", ".srw"
+        self.file_extensions = {
+            ".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff"
+            ".jpg", ".nef", ".orf", ".pef", ".png", ".raf", ".rw2", ".srw"
+            }
         
-        
+        self.raw_extensions = {
+            ".arw", ".cr2", ".dng", ".nef", ".orf", ".pef", ".raf", ".rw2", ".srw"
+            }
+        # untested:
+        # arq, crm, cr3, crw, ciff, erf, fff, flif, gpr, hdp, wdp,
+        # heif, hif, iiq, insp, jpf, jpm, jpx, jph, mef, mos, mpo,
+        # nrw, ori, jng, mng, qtif, qti, qif, sr2, x3f
+                
     def check_pause_stop(self):
         if self.check_paused_or_stopped():
             while self.check_paused_or_stopped():
@@ -472,20 +364,18 @@ class FileProcessor:
         return False
         
     def list_files(self, directory):
-            files = []
-            for filename in os.listdir(directory):
-                
-                file_path = os.path.join(directory, filename)
-               
-                if os.path.isfile(file_path):
-                    file_extension = os.path.splitext(filename)[1].lower()
-                    if file_extension in self.file_extensions:
-                        files.append(file_path)
-            if files:
-                self.files_in_queue += len(files)
-                self.callback(f"Added folder {directory} to queue containing {len(files)} image files.") 
-            return files
-                        
+        files = []
+        for filename in os.listdir(directory):
+            file_path = os.path.join(directory, filename)
+            if os.path.isfile(file_path):
+                file_extension = os.path.splitext(filename)[1].lower()
+                if file_extension in self.file_extensions:
+                    files.append(file_path)
+        if files:
+            self.files_in_queue += len(files) 
+            self.callback(f"Added folder {directory} to queue containing {len(files)} image files.")
+        return files
+        
     def process_directory(self, directory):
         logging.basicConfig(level=logging.DEBUG)
         files = self.list_files(directory)
@@ -500,27 +390,30 @@ class FileProcessor:
                 return
             self.process_file(metadata)
         
-                
+    
     def process_file(self, metadata):
-        files_left = abs(self.files_done - self.files_in_queue)
-        self.callback(f"Processed {self.files_done} images with {files_left} remaining in current folder queue.")
+        self.files_left = abs(self.files_done - self.files_in_queue)
         try:
-        
             file_path = metadata['SourceFile']
-            image_type = metadata['File:FileType'].lower()
+            file_extension = os.path.splitext(file_path)[1].lower()
             
-            # if there is an entry for jpegfromraw then there is an embedded jpeg 
-            embedded_jpeg_exists = any('jpgfromraw' in key.lower() for key in metadata)
-            base64_image = self.image_processor.route_image(file_path, image_type, embedded_jpeg_exists)
-            if self.check_pause_stop():
-                return
-            if base64_image:
-                self.update_metadata(metadata, base64_image)
-                self.files_done += 1
-        
+            if file_extension in self.file_extensions:
+                is_camera_raw = file_extension in self.raw_extensions
+                
+                image_object_or_path = self.image_processor.route_image(file_path, is_camera_raw)
+            
+                if self.check_pause_stop():
+                    return
+            
+                if image_object_or_path:
+                    self.update_metadata(metadata, image_object_or_path)
+                    self.files_done += 1
+            else:
+                self.callback(f"Not a supported image type: {file_path}")
+                
         except Exception as e:
             self.logger.error(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
-
+        
     def process_keywords(self, metadata, llm_metadata):
         """ Check if update is configured, if so combine the old and new
             keywords into a set to deduplicate them 
@@ -544,7 +437,9 @@ class FileProcessor:
         """        
         try:
             file_path = metadata["SourceFile"]
-        
+            
+            output = f"---\nImage: {os.path.basename(file_path)}" 
+            
             caption = clean_string(self.llm_processor.interrogate_image(base64_image))
             llm_metadata = clean_json(self.llm_processor.describe_content(metadata, caption))
             
@@ -555,12 +450,14 @@ class FileProcessor:
                     xmp_metadata["IPTC:Keywords"] = ""
                     xmp_metadata["XMP:Subject"] = ""
                     xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-            
+                    output += "\nKeywords: " + " ,".join(xmp_metadata["MWG:Keywords"])
+        
                 # MWG is metadata working group. This will sync the tags across
                 # EXIF, IPTC, and XMP
                 if self.config.write_caption and llm_metadata['Summary']:
                     xmp_metadata["MWG:Description"] = llm_metadata["Summary"]
-                    
+                    output += "\nDescription: " + xmp_metadata["MWG:Description"]
+                     
                 if not self.config.dry_run:
                     if self.config.overwrite:
                         et.set_tags(
@@ -571,10 +468,10 @@ class FileProcessor:
                     else:
                         et.set_tags(file_path, tags=xmp_metadata)
 
-                    print(f"Updated XMP tags for {file_path}")
+                    self.callback(f"{output}\n---\nCompleted {self.files_done} so far with {self.files_left} remaining to be processed in folder queue.")
                 else:
-                    print(f"Dry run, {file_path} not updated")
-
+                    self.callback(f"{output}\n---\nCompleted {self.files_done} so far with {self.files_left} remaining to be processed in folder queue.")
+                
         except Exception as e:
             self.logger.error(f"Error updating metadata for {metadata.get('SourceFile', 'unknown')}: {str(e)}")
         
