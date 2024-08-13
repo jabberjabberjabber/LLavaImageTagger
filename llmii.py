@@ -379,6 +379,7 @@ class FileProcessor:
     def process_directory(self, directory):
         logging.basicConfig(level=logging.DEBUG)
         files = self.list_files(directory)
+        self.running_time = 0
         metadata_list = []
         try:
             with exiftool.ExifToolHelper(logger=logging.getLogger(__name__)) as et:
@@ -393,9 +394,12 @@ class FileProcessor:
     
     def process_file(self, metadata):
         self.files_left = abs(self.files_done - self.files_in_queue)
+        
         try:
             file_path = metadata['SourceFile']
             file_extension = os.path.splitext(file_path)[1].lower()
+            
+            self.start_time = time.time()
             
             if file_extension in self.file_extensions:
                 is_camera_raw = file_extension in self.raw_extensions
@@ -408,6 +412,7 @@ class FileProcessor:
                 if image_object_or_path:
                     self.update_metadata(metadata, image_object_or_path)
                     self.files_done += 1
+                
             else:
                 self.callback(f"Not a supported image type: {file_path}")
                 
@@ -457,7 +462,14 @@ class FileProcessor:
                 if self.config.write_caption and llm_metadata['Summary']:
                     xmp_metadata["MWG:Description"] = llm_metadata["Summary"]
                     output += "\nDescription: " + xmp_metadata["MWG:Description"]
-                     
+            
+                end_time = time.time()
+                processing_time = end_time - self.start_time 
+                self.running_time = processing_time + self.running_time 
+                self.average_time = self.running_time / self.files_done
+                self.finish_time = self.average_time * self.files_left
+                callback_output = f"{output}\n---\nCompleted image number {self.files_done} in {processing_time:.2f} seconds. There are {self.files_left} images remaining to be processed in this folder. Estimated time to finish is {self.finish_time:.2f} seconds from now." 
+                
                 if not self.config.dry_run:
                     if self.config.overwrite:
                         et.set_tags(
@@ -468,9 +480,9 @@ class FileProcessor:
                     else:
                         et.set_tags(file_path, tags=xmp_metadata)
 
-                    self.callback(f"{output}\n---\nCompleted {self.files_done} so far with {self.files_left} remaining to be processed in folder queue.")
+                    self.callback(callback_output)
                 else:
-                    self.callback(f"{output}\n---\nCompleted {self.files_done} so far with {self.files_left} remaining to be processed in folder queue.")
+                    self.callback(callback_output)
                 
         except Exception as e:
             self.logger.error(f"Error updating metadata for {metadata.get('SourceFile', 'unknown')}: {str(e)}")

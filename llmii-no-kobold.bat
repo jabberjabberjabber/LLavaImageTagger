@@ -14,6 +14,22 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+REM Check if exiftool is installed and in PATH
+where exiftool >nul 2>&1
+if errorlevel 1 (
+    echo exiftool is not found. Attempting to install using winget...
+    winget install -e --id OliverBetz.ExifTool
+    if errorlevel 1 (
+        echo Failed to install exiftool. Please install it manually.
+        pause
+        exit /b 1
+    )
+    echo exiftool has been installed. Please restart this script for the changes to take effect.
+    pause
+    exit /b 0
+) else (
+    echo exiftool is already installed.
+)
 
 REM Check if the virtual environment exists, create if it doesn't
 if not exist "%VENV_NAME%\Scripts\activate.bat" (
