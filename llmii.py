@@ -12,6 +12,8 @@ from json_repair import repair_json
 import json
 import time
 import rawpy
+import uuid
+from tinydb import TinyDB, where
 
 def clean_string(data):
     if isinstance(data, dict):
@@ -65,7 +67,8 @@ class Config:
         self.write_keywords = False
         self.update_keywords = False
         self.write_caption = False
-        self.image_instruction = "What do you see in the image? Be specific and descriptive"
+        self.image_instruction = "Describe the image clearly using short declaritive statements. Do not try to convey emotions or feelings; be direct and factual. The description should be easily searchable for someone looking for the contents of the image."
+        #self.image_instruction = "What do you see in the image? Be specific and descriptive"
         self.keywords_count = 7
         self.max_workers = 4
 
@@ -101,7 +104,7 @@ class ImageProcessor:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
-    def route_image(self, file_path, is_camera_raw):
+    def route_image(self, file_path, is_camera_raw=False):
         try:
             if is_camera_raw:
                 return self.raw_to_base64_jpeg(file_path)     
@@ -157,9 +160,10 @@ class LLMProcessor:
         }
         self.image_instruction = config.image_instruction
         
+        
         # this prompt works well, you can change it if you want, but comment it out in
         # case you want to use it again.
-        self.metadata_instruction = f"Use the metadata and caption to generate a summary and no fewer than {self.config.keywords_count} IPTC keywords. Return as a JSON object with keys Summary and Keywords.\n"
+        self.metadata_instruction = f"Use the metadata and caption to generate a summary and no fewer than {self.config.keywords_count} IPTC keywords. Generate only a JSON formated object with keys Summary and Keywords.\n"
         
         self.api_url = config.api_url
         self.headers = {
@@ -172,14 +176,15 @@ class LLMProcessor:
         # a different name than its base
         self.templates = {
             1: {"name": "Alpaca", "user": "\n\n### Instruction:\n\n", "assistant": "\n\n### Response:\n\n", "system": ""},
-            2: {"name": ["Vicuna", "Wizard", "ShareGPT", "Qwen"], "user": "### Human: ", "assistant": "\n### Assistant: ", "system": ""},
+            2: {"name": ["Vicuna", "Wizard", "ShareGPT"], "user": "### Human: ", "assistant": "\n### Assistant: ", "system": ""},
             3: {"name": ["Llama 2", "Llama2", "Llamav2"], "user": "[INST] ", "assistant": " [/INST]", "system": ""},
             4: {"name": ["Llama 3", "Llama3", "Llama-3"], "endTurn": "<|eot_id|>", "system": "", "user": "<|start_header_id|>user<|end_header_id|>\n\n", "assistant": "<|start_header_id|>assistant<|end_header_id|>\n\n"},
             5: {"name": "Phi-3", "user": "<|end|><|user|>\n", "assistant": "<end_of_turn><|end|><|assistant|>\n", "system": ""},
             6: {"name": ["Mistral", "bakllava"], "user": "\n[INST] ", "assistant": " [/INST]\n", "system": ""},
             7: {"name": ["Yi"], "user": "<|user|>", "assistant": "<|assistant|>", "system": ""},
-            8: {"name": ["ChatML", "obsidian", "Nous", "Hermes", "llava-v1.6-34b"], "user": "<|im_start|>user\n", "assistant": "<|im_end|>\n<|im_start|>assistant\n", "system": ""},
+            8: {"name": ["ChatML", "obsidian", "Nous", "Hermes", "llava-v1.6-34b", "cpm", "Qwen"], "user": "<|im_start|>user\n", "assistant": "<|im_end|>\n<|im_start|>assistant\n", "system": ""},
             9: {"name": ["WizardLM"], "user": "input:\n", "assistant": "output\n", "system": ""}
+        
         }
         self.model = self._get_model()
         self.max_context = self._get_max_context_length()
@@ -212,13 +217,19 @@ class LLMProcessor:
         """ Changing these sampler settings is not recommended.
         """         
         prompt = self.get_prompt(self.image_instruction)
+        # CPMV wants a higher temp in sampler settings
+        
+        #if "cpm" in self.model.get("name", "") or "Qwen" in self.model.get("name", ""):
+        #    temp = 0.7
+        #else:
+        temp = 0.1
         payload = {
             "prompt": prompt,
             "images": [base64_image],
             "max_length": 150,
             "genkey": self.genkey,
             "model": "clip",
-            "temperature": 0.1,
+            "temperature": temp,
         }
         return self._call_api("interrogate", payload)
 
@@ -270,7 +281,7 @@ class LLMProcessor:
             key=lambda x: x[1],
             default=(None, 0)
         )[0]
-
+        
         return matched_template if matched_template else self.templates[1]
     
     def metadata_prompt(self, metadata, caption):
@@ -320,7 +331,7 @@ class LLMProcessor:
     def _get_token_count(self, content):
         payload = {"prompt": content, "genkey": self.genkey}
         return self._call_api("tokencount", payload)
-
+        
 class FileProcessor:
     def __init__(self, config, image_processor, check_paused_or_stopped, callback):
         self.config = config
@@ -331,30 +342,58 @@ class FileProcessor:
         self.callback = callback
         self.files_in_queue = 0
         self.files_done = 1
+        self.db = TinyDB(os.path.join(config.directory, "filedata.json"))
         
         # add more tags here if needed
         self.exiftool_fields = [
-            "FileName", "Directory", "FileType", "MIMEType",
-            "DateTimeOriginal", "Caption-abstract", "UserComments",
-            "CreateDate", "ModifyDate", "XMP:Description", "Title",
-            "Subject", "Keywords", "Make", "Model",
-            "LensModel", "Artist", "Copyright", "JPGFromRaw",
+            #"FileName", "Directory",  
+            "Caption-abstract", "UserComments",
+            "XMP:Description", "Title",
+            "Subject", "Keywords", "XMP:Identifier",
+            "Artist", "Copyright", 
+            # "DateTimeOriginal", "ModifyDate", "LensModel", "JPGFromRaw","Make", "Model", "MIMEType","CreateDate",
+            # "FileType",
         ]
         
         # add more extensions here if needed
-        self.file_extensions = {
-            ".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff",
-            ".jpg", ".nef", ".orf", ".pef", ".png", ".raf", ".rw2", ".srw"
-            }
+        self.file_extensions = {".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff", ".jpg", ".nef", ".orf", ".pef", ".png", ".raf", ".rw2", ".srw"}
         
-        self.raw_extensions = {
-            ".arw", ".cr2", ".dng", ".nef", ".orf", ".pef", ".raf", ".rw2", ".srw"
-            }
+        self.raw_extensions = {".arw", ".cr2", ".dng", ".nef", ".orf", ".pef", ".raf", ".rw2", ".srw"}
         # untested:
         # arq, crm, cr3, crw, ciff, erf, fff, flif, gpr, hdp, wdp,
         # heif, hif, iiq, insp, jpf, jpm, jpx, jph, mef, mos, mpo,
         # nrw, ori, jng, mng, qtif, qti, qif, sr2, x3f
                 
+    def check_uuid(self, metadata):
+        try:
+            
+            if metadata.get('XMP:Identifier'):
+                if self.db.search(where('XMP:Identifier') == metadata.get('XMP:Identifier')):
+                    print(f"UUID found {metadata.get('XMP:Identifier')}")
+                    if self.config.write_keywords:
+                        return metadata
+                    else:
+                        return None
+                else:
+                    return metadata
+            else:
+                metadata['XMP:Identifier'] = str(uuid.uuid4())
+                #print(f"Image UUID set to {metadata['XMP:Identifier']}")
+                return metadata
+                
+        except Exception as e:
+            self.logger.error(f"Error checking for duplicate: {str(e)}")
+            return None
+
+    def update_db(self, metadata):
+        try:
+            self.db.upsert(metadata, where('XMP:Identifier') == metadata.get('XMP:Identifier'))
+            print(f"DB Updated with UUID: {metadata.get('XMP:Identifier')}")
+            return 
+        except: 
+            self.logger.error(f"Error storing metadata: {str(e)}")
+            return False
+            
     def check_pause_stop(self):
         if self.check_paused_or_stopped():
             while self.check_paused_or_stopped():
@@ -362,7 +401,7 @@ class FileProcessor:
             if self.check_paused_or_stopped():
                 return True
         return False
-        
+            
     def list_files(self, directory):
         files = []
         for filename in os.listdir(directory):
@@ -386,39 +425,48 @@ class FileProcessor:
                 metadata_list = et.get_tags(files, self.exiftool_fields)
         except Exception as e:
             self.logger.error(f"Error processing directory {directory}: {str(e)}")
+        
+        print(f"Number of files to process: {len(metadata_list)}")
+        
         for metadata in metadata_list:
             if self.check_pause_stop():
                 return
+            print(f"Processing file: {metadata.get('SourceFile', 'unknown')}")
+            print(f"{repr(metadata)}")
             self.process_file(metadata)
-        
     
     def process_file(self, metadata):
         self.files_left = abs(self.files_done - self.files_in_queue)
         
         try:
             file_path = metadata['SourceFile']
-            file_extension = os.path.splitext(file_path)[1].lower()
-            
-            self.start_time = time.time()
-            
-            if file_extension in self.file_extensions:
-                is_camera_raw = file_extension in self.raw_extensions
+            metadata_added = self.check_uuid(metadata)
+            if metadata_added is not None:
+                metadata = metadata_added    
+                file_extension = os.path.splitext(file_path)[1].lower()
+                self.start_time = time.time()
                 
-                image_object_or_path = self.image_processor.route_image(file_path, is_camera_raw)
-            
-                if self.check_pause_stop():
-                    return
-            
-                if image_object_or_path:
-                    self.update_metadata(metadata, image_object_or_path)
+                if file_extension in self.file_extensions:
+                    is_camera_raw = file_extension in self.raw_extensions
+                    image_object_or_path = self.image_processor.route_image(file_path, is_camera_raw)
+                    
+                    if image_object_or_path:
+                        self.update_metadata(metadata, image_object_or_path)
+                        
+                        
+                        self.files_done += 1
+                    if self.check_pause_stop():
+                        return    
+                else:
+                    print(f"Not a supported image type: {file_path}")                    
                     self.files_done += 1
-                
             else:
-                self.callback(f"Not a supported image type: {file_path}")
-                
+                print(f"File {file_path} has already been processed or is a duplicate")
+                self.files_done += 1
         except Exception as e:
-            self.logger.error(f"Error processing file {metadata.get('FileName', 'unknown')}: {str(e)}")
-        
+            self.logger.error(f"Error processing file {file_path}: {str(e)}")
+            self.files_done += 1
+    
     def process_keywords(self, metadata, llm_metadata):
         """ Check if update is configured, if so combine the old and new
             keywords into a set to deduplicate them 
@@ -450,12 +498,12 @@ class FileProcessor:
             
             with exiftool.ExifToolHelper() as et:
                 xmp_metadata = {}        
-                
+                xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
                 if llm_metadata["Keywords"]:
                     xmp_metadata["IPTC:Keywords"] = ""
                     xmp_metadata["XMP:Subject"] = ""
                     xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                    output += "\nKeywords: " + " ,".join(xmp_metadata["MWG:Keywords"])
+                    output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
         
                 # MWG is metadata working group. This will sync the tags across
                 # EXIF, IPTC, and XMP
@@ -477,23 +525,23 @@ class FileProcessor:
                             tags=xmp_metadata,
                             params=["-P", "-overwrite_original"],
                         )
+                        self.update_db(xmp_metadata)
                     else:
                         et.set_tags(file_path, tags=xmp_metadata)
-
-                    self.callback(callback_output)
-                else:
-                    self.callback(callback_output)
+                        self.update_db(xmp_metadata)
                 
+                self.callback(callback_output)
+                    
         except Exception as e:
-            self.logger.error(f"Error updating metadata for {metadata.get('SourceFile', 'unknown')}: {str(e)}")
-        
+            self.logger.error(f"Error updating metadata for {metadata.get('SourceFile', 'unknown')}: {str(e)}")      
+
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
     
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
-
+    
     logger.info("Initializing components...")
     image_processor = ImageProcessor()
     
