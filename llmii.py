@@ -15,6 +15,30 @@ import rawpy
 import uuid
 from tinydb import TinyDB, where
 
+nlp = None
+
+def normalize_keyword(keyword):
+    keyword = str(keyword).lower().strip()
+    # Replace underscores with spaces
+    keyword = re.sub(r'[_]+', ' ', keyword)
+    # Remove any other non-alphanumeric characters
+    keyword = re.sub(r'[^\w\s]', '', keyword)
+    # Replace multiple spaces with a single space
+    keyword = re.sub(r'\s+', ' ', keyword)
+    return keyword
+
+def load_spacy():
+    global nlp
+    if nlp is None:
+        import spacy
+        nlp = spacy.load("en_core_web_sm")
+        print("Loaded spaCy for lemmatization")
+    return nlp
+
+def lemmatize_keyword(keyword, nlp_model):
+    doc = nlp_model(keyword)
+    return ' '.join([token.lemma_ for token in doc])
+    
 def clean_string(data):
     if isinstance(data, dict):
         data = json.dumps(data)
@@ -66,9 +90,7 @@ class Config:
         self.dry_run = False
         self.write_keywords = False
         self.update_keywords = False
-        self.write_caption = False
-        self.image_instruction = "Describe the image clearly using short declaritive statements. Do not try to convey emotions or feelings; be direct and factual. The description should be easily searchable for someone looking for the contents of the image."
-        #self.image_instruction = "What do you see in the image? Be specific and descriptive"
+        self.reprocess = False
         self.keywords_count = 7
         self.max_workers = 4
 
@@ -82,11 +104,11 @@ class Config:
         parser.add_argument("--overwrite", action="store_true", help="Overwrite existing file metadata without making backup")
         parser.add_argument("--dry-run", action="store_true", help="Don't write any files")
         parser.add_argument("--write-keywords", action="store_true", help="Write Keywords metadata")
+        parser.add_argument("--reprocess", action="store_true", help="Reprocess files")
         parser.add_argument("--update-keywords", action="store_true", help="Update Keywords metadata")
-        parser.add_argument("--write-caption", action="store_true", help="Write caption metadata")
         parser.add_argument("--keywords-count", type=int, default=7, help="Number of keywords to generate")
-        parser.add_argument("--image-instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
         parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of worker threads")
+        parser.add_argument("--lemmatize", action="store_true", help="Apply lemmatization to keywords")
         args = parser.parse_args()
         
         config = cls()
@@ -158,13 +180,10 @@ class LLMProcessor:
             "model": "/api/v1/model",
             "generate": "/api/v1/generate",
         }
-        self.image_instruction = config.image_instruction
-        
         
         # this prompt works well, you can change it if you want, but comment it out in
         # case you want to use it again.
-        self.metadata_instruction = f"Use the metadata and caption to generate a summary and no fewer than {self.config.keywords_count} IPTC keywords. Generate only a JSON formated object with keys Summary and Keywords.\n"
-        
+        self.metadata_instruction = f"Generate a list of keywords for the image for searching and catagorizing which will encompass some or all of the following: the PEOPLE in the image including GENDER, AGE, PHYSICAL DESCRIPTION and ETHNICITY; concepts; actions; relationships; profession; overall subject; setting; the technical and framing aspects of shot; any animals or objects. Do not create keywords for things that are not in the image. Generate no fewer than {self.config.keywords_count} IPTC keywords. Generate only a JSON formated object with key Keywords and a single list of keywords.\n"
         self.api_url = config.api_url
         self.headers = {
             "Content-Type": "application/json",
@@ -182,7 +201,7 @@ class LLMProcessor:
             5: {"name": "Phi-3", "user": "<|end|><|user|>\n", "assistant": "<end_of_turn><|end|><|assistant|>\n", "system": ""},
             6: {"name": ["Mistral", "bakllava"], "user": "\n[INST] ", "assistant": " [/INST]\n", "system": ""},
             7: {"name": ["Yi"], "user": "<|user|>", "assistant": "<|assistant|>", "system": ""},
-            8: {"name": ["ChatML", "obsidian", "Nous", "Hermes", "llava-v1.6-34b", "cpm", "Qwen"], "user": "<|im_start|>user\n", "assistant": "<|im_end|>\n<|im_start|>assistant\n", "system": ""},
+            8: {"name": ["ggml", "ChatML", "obsidian", "Nous", "Hermes", "llava-v1.6-34b", "cpm", "Qwen"], "user": "<|im_start|>user\n", "assistant": "<|im_end|>\n<|im_start|>assistant\n", "system": ""},
             9: {"name": ["WizardLM"], "user": "input:\n", "assistant": "output\n", "system": ""}
         
         }
@@ -213,40 +232,22 @@ class LLMProcessor:
             print(f"Error calling API: {str(e)}")
             return None
 
-    def interrogate_image(self, base64_image):       
-        """ Changing these sampler settings is not recommended.
-        """         
-        prompt = self.get_prompt(self.image_instruction)
-        # CPMV wants a higher temp in sampler settings
-        
-        #if "cpm" in self.model.get("name", "") or "Qwen" in self.model.get("name", ""):
-        #    temp = 0.7
-        #else:
-        temp = 0.1
-        payload = {
-            "prompt": prompt,
-            "images": [base64_image],
-            "max_length": 150,
-            "genkey": self.genkey,
-            "model": "clip",
-            "temperature": temp,
-        }
-        return self._call_api("interrogate", payload)
-
-    def describe_content(self, metadata, caption):
+    def describe_content(self, base64_image):
         """ You can play with the sampler settings to achieve 
             different results.
             Max length gets expanded as keyword number increases
             to compensate for longer generation.
         """
-        prompt = self.metadata_prompt(metadata, caption)
+        prompt = self.get_prompt(instruction=self.metadata_instruction)
         payload = {
             "prompt": prompt,
-            "max_length": 200 + (self.config.keywords_count * 15),
+            "max_length": 300 + (self.config.keywords_count * 10),
+            "images": [base64_image],
             "genkey": self.genkey,
+            "model": "clip",
             "top_p": 1,
             "top_k": 0,
-            "temp": 0.5,
+            "temp": 0.1,
             "rep_pen": 1,
             "min_p": 0.05,
         }
@@ -284,26 +285,6 @@ class LLMProcessor:
         
         return matched_template if matched_template else self.templates[1]
     
-    def metadata_prompt(self, metadata, caption):
-        """ Creates the portion of the second query which contains the 
-            metadata to give the LLM information with which to come 
-            up with the tags.
-            Start with the caption we got from first query and append
-            existing tags except in the case we want to redo them.
-        """
-        prompt = f"Caption: {caption}\n"
-        if isinstance(metadata, dict):
-            no_key = ["caption"]
-            if self.config.write_keywords:
-                no_key.append("XMP:Subject")
-                no_key.append("IPTC:Keywords")
-                no_key.append("MWG:Keywords")    
-            prompt += "Metadata:\n"
-            for key, value in metadata.items():
-                if key not in no_key:
-                    prompt += f"{key} is {value}\n"
-        return self.get_prompt(instruction=self.metadata_instruction, content=prompt)
-    
     def get_prompt(self, instruction="", content=""):
         """ Uses the instruct templates to create a prompt with the proper 
             start and end sequences. If the model name does not contain
@@ -313,7 +294,6 @@ class LLMProcessor:
         assistant_part = self.model["assistant"]
         end_part = self.model.get("endTurn", "")
         prompt = f"{user_part}{instruction}{content}{end_part}{assistant_part}"
-        #print(f"Querying LLM with prompt:\n{prompt}")
         return prompt
 
     @staticmethod
@@ -342,18 +322,14 @@ class FileProcessor:
         self.callback = callback
         self.files_in_queue = 0
         self.files_done = 1
-        self.db = TinyDB(os.path.join(config.directory, "filedata.json"))
+        self.db = TinyDB("filedata.json")
+        self.nlp_model = None
+        if self.config.lemmatize:
+            self.nlp_model = load_spacy()
+            self.callback("Loaded spaCy for lemmatization")
         
         # add more tags here if needed
-        self.exiftool_fields = [
-            #"FileName", "Directory",  
-            "Caption-abstract", "UserComments",
-            "XMP:Description", "Title",
-            "Subject", "Keywords", "XMP:Identifier",
-            "Artist", "Copyright", 
-            # "DateTimeOriginal", "ModifyDate", "LensModel", "JPGFromRaw","Make", "Model", "MIMEType","CreateDate",
-            # "FileType",
-        ]
+        self.exiftool_fields = ["XMP:Description", "Subject", "Keywords", "XMP:Identifier"]
         
         # add more extensions here if needed
         self.file_extensions = {".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff", ".jpg", ".nef", ".orf", ".pef", ".png", ".raf", ".rw2", ".srw"}
@@ -370,7 +346,7 @@ class FileProcessor:
             if metadata.get('XMP:Identifier'):
                 if self.db.search(where('XMP:Identifier') == metadata.get('XMP:Identifier')):
                     print(f"UUID found {metadata.get('XMP:Identifier')}")
-                    if self.config.write_keywords:
+                    if self.config.reprocess:
                         return metadata
                     else:
                         return None
@@ -468,17 +444,25 @@ class FileProcessor:
             self.files_done += 1
     
     def process_keywords(self, metadata, llm_metadata):
-        """ Check if update is configured, if so combine the old and new
-            keywords into a set to deduplicate them 
+        """ Normalize and optionally lemmatize all keywords. If update is configured,
+            combine the old and new keywords.
         """
-        all_keywords = set(llm_metadata.get("Keywords", []))
+        all_keywords = set()
         
         if self.config.update_keywords:
-            keywords = metadata.get("IPTC:Keywords", [])
-            subject = metadata.get("XMP:Subject", [])
-            all_keywords.update(subject)
-            all_keywords.update(keywords)
-        return list(all_keywords)
+            all_keywords.update(metadata.get("IPTC:Keywords", []))
+            all_keywords.update(metadata.get("XMP:Subject", []))
+        
+        all_keywords.update(llm_metadata.get("Keywords", []))
+        processed_keywords = set()
+        
+        for keyword in all_keywords:
+            normalized = normalize_keyword(keyword)
+            if self.config.lemmatize:
+                normalized = lemmatize_keyword(normalized, self.nlp_model)
+            processed_keywords.add(normalized)
+
+        return list(processed_keywords)
     
     def update_metadata(self, metadata, base64_image):
         """ clean_string and clean_json are vital here to ensure useable output
@@ -493,23 +477,17 @@ class FileProcessor:
             
             output = f"---\nImage: {os.path.basename(file_path)}" 
             
-            caption = clean_string(self.llm_processor.interrogate_image(base64_image))
-            llm_metadata = clean_json(self.llm_processor.describe_content(metadata, caption))
+            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
             
             with exiftool.ExifToolHelper() as et:
                 xmp_metadata = {}        
                 xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
-                if llm_metadata["Keywords"]:
-                    xmp_metadata["IPTC:Keywords"] = ""
-                    xmp_metadata["XMP:Subject"] = ""
-                    xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                    output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
-        
-                # MWG is metadata working group. This will sync the tags across
-                # EXIF, IPTC, and XMP
-                if self.config.write_caption and llm_metadata['Summary']:
-                    xmp_metadata["MWG:Description"] = llm_metadata["Summary"]
-                    output += "\nDescription: " + xmp_metadata["MWG:Description"]
+            if llm_metadata["Keywords"]:
+                xmp_metadata["IPTC:Keywords"] = ""
+                xmp_metadata["XMP:Subject"] = ""
+                xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
+                output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
+            
             
                 end_time = time.time()
                 processing_time = end_time - self.start_time 

@@ -68,21 +68,18 @@ class ImageIndexerGUI(QMainWindow):
         api_layout.addWidget(self.api_password_input)
         layout.addLayout(api_layout)
 
-        # Image Instruction
-        image_instruction_layout = QHBoxLayout()
-        self.image_instruction_input = QLineEdit("What do you see in the image? Be specific and descriptive")
-        image_instruction_layout.addWidget(QLabel("Image Instruction:"))
-        image_instruction_layout.addWidget(self.image_instruction_input)
-        layout.addLayout(image_instruction_layout)
-
         # Checkboxes for options
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout()
         self.no_crawl_checkbox = QCheckBox("Don't crawl subdirectories")
+        self.reprocess_checkbox = QCheckBox("Process files even if previously processed")
+        self.lemmatize_checkbox = QCheckBox("Lemmatize keywords (example: run, ran, running all become run)", checked=True)
         self.overwrite_checkbox = QCheckBox("Don't make backups before writing")
         self.dry_run_checkbox = QCheckBox("Pretend mode (see what happens without writing)")
         options_layout.addWidget(self.no_crawl_checkbox)
         options_layout.addWidget(self.overwrite_checkbox)
+        options_layout.addWidget(self.reprocess_checkbox)
+        options_layout.addWidget(self.lemmatize_checkbox)        
         options_layout.addWidget(self.dry_run_checkbox)
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
@@ -95,8 +92,8 @@ class ImageIndexerGUI(QMainWindow):
         self.keywords_radio_group = QButtonGroup(self)
         
         #self.no_keywords_radio = QRadioButton("Don't modify keywords")
-        self.write_keywords_radio = QRadioButton("Clear existing and write new keywords")
-        self.update_keywords_radio = QRadioButton("Update existing keywords")
+        self.write_keywords_radio = QRadioButton("Clear existing keywords and write new ones")
+        self.update_keywords_radio = QRadioButton("Add to existing keywords")
         
         #self.keywords_radio_group.addButton(self.no_keywords_radio)
         self.keywords_radio_group.addButton(self.write_keywords_radio)
@@ -119,10 +116,7 @@ class ImageIndexerGUI(QMainWindow):
         
         keywords_layout.addLayout(keywords_count_layout)
         
-        self.description_checkbox = QCheckBox("Generate and set description")
-        
         xmp_layout.addLayout(keywords_layout)
-        xmp_layout.addWidget(self.description_checkbox)
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
         
@@ -160,8 +154,10 @@ class ImageIndexerGUI(QMainWindow):
         config.api_url = self.api_url_input.text()
         config.api_password = self.api_password_input.text()
         config.no_crawl = self.no_crawl_checkbox.isChecked()
+        config.reprocess = self.reprocess_checkbox.isChecked()
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
+        config.lemmatize = self.lemmatize_checkbox.isChecked()
         if self.write_keywords_radio.isChecked():
             config.write_keywords = True
             config.update_keywords = False
@@ -170,9 +166,7 @@ class ImageIndexerGUI(QMainWindow):
             config.update_keywords = True
 
         config.keywords_count = self.keywords_count.value()
-        config.write_caption = self.description_checkbox.isChecked()
-        config.image_instruction = self.image_instruction_input.text()
-
+     
         self.indexer_thread = IndexerThread(config)
         self.indexer_thread.output_received.connect(self.update_output)
         self.indexer_thread.finished.connect(self.indexer_finished)
