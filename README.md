@@ -8,7 +8,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 
 ## Features
  
-- **Intelligent Image Analysis**: Utilizes a local AI model to generate a variable number of keywords and a description for each image.
+- **Intelligent Image Analysis**: Utilizes a local AI model to generate a variable number of keywords for each image.
 - **Metadata Enhancement**: Can automatically edit image metadata with generated tags.
 - **Local Processing**: All processing is done locally on your machine.
 - **Multi-Format Support**: Handles a wide range of image formats, including all major raw camera files: arw cr2 dng gif jpeg tif tiff jpg nef orf pef png raf rw2 srw
