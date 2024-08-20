@@ -4,7 +4,7 @@
 
 LLMImageIndexer is an intelligent image processing and indexing tool that leverages local AI to generate comprehensive metadata for your image collection. This tool uses advanced language models to analyze images and create rich, descriptive metadata without sending any data over the internet, ensuring your privacy and data security.
 
-![LLMImageIndexer Screenshot](screenshot-llmii.png)
+[Imgur](https://imgur.com/nYM9VcH)
 
 ## Features
  
@@ -15,7 +15,11 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - **Flexible Configuration**: Options include number of keywords, update or write clean, custom prompt, description generation and directory traversal.
 - **User-Friendly GUI**: Includes a GUI and installer. Relies on Koboldcpp, a single executable, for all AI functionality.  
 - **GPU Acceleration**: Will use Apple Metal, Nvidia CUDA, or AMD (Vulkan) hardware if available to greatly speed inference.
-- **Cross-Platform**: Supports Windows, macOS (including ARM), and Linux.
+- **Cross-Platform**: Supports Windows, macOS ARM, and Linux.
+- **Stop and start capability**: You can stop and start again later without having to reprocess all the files again
+- **Writes to a local plain-text database file**: The filedata.json file in the script directory contains information about files processed and is readable with any text editor
+- **Lemmatizes keywords**: combines various forms of the same words together using natural language processing
+- **Now much faster**: latest update has reduced average processing time for an image from 12 seconds to 2.5 seconds when used with an RTX3080 GPU
 
 ## Installation
 
@@ -36,7 +40,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 
 ### macOS Installation (including ARM)
 
-1. Clone the repository or download and extract the ZIP file.
+1. Clone the repository or download the [ZIP file](https://github.com/jabberjabberjabber/LLavaImageTagger/archive/refs/heads/main.zip) and extract it.
 
 2. Install Python 3.7 or higher if not already installed. You can use Homebrew:
    ```
@@ -48,7 +52,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
    brew install exiftool
    ```
 
-4. The KoboldCPP binary for macOS ARM is included in the repository. If you're using an Intel Mac, you will need to compile according to the documentation on the KoboldCPP repo.
+4. Download [KoboldCPP.exe](https://github.com/LostRuins/koboldcpp/releases) and place it in the LLMImageIndexer folder.
 
 5. Open a terminal in the LLMImageIndexer folder and run:
    ```
@@ -107,13 +111,14 @@ For all platforms, the script will set up the Python environment, install depend
 - **Directory**: Target image directory (includes subdirectories by default)
 - **API URL**: KoboldCPP API endpoint (change if running on another machine)
 - **API Password**: Set if required by your KoboldCPP setup
-- **Image Instruction**: Customize the prompt for image analysis
+- **Reprocess**: The files that are processed already are stored in a database and skipped if you resume later, this will do them all over again
 - **Don't crawl subdirectories**: Disable scanning of subdirectories
+- **Lemmatize keywords**: Combine various forms of the same word together (example: run, ran, running will be combined to 'run')
 - **Don't make backups before writing**: Skip creating backup files
 - **Pretend mode**: Simulate processing without writing to files
 - **Keywords**: Choose to clear and write new keywords or update existing ones
 - **Number of keywords**: Set the number of keywords to generate
-- **Generate and set description**: Enable description generation
+
 
 
 ## Troubleshooting
