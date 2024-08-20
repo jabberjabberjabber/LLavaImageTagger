@@ -12,7 +12,6 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - **Metadata Enhancement**: Can automatically edit image metadata with generated tags.
 - **Local Processing**: All processing is done locally on your machine.
 - **Multi-Format Support**: Handles a wide range of image formats, including all major raw camera files: arw cr2 dng gif jpeg tif tiff jpg nef orf pef png raf rw2 srw
-- **Flexible Configuration**: Options include number of keywords, update or write clean, custom prompt, description generation and directory traversal.
 - **User-Friendly GUI**: Includes a GUI and installer. Relies on Koboldcpp, a single executable, for all AI functionality.  
 - **GPU Acceleration**: Will use Apple Metal, Nvidia CUDA, or AMD (Vulkan) hardware if available to greatly speed inference.
 - **Cross-Platform**: Supports Windows, macOS ARM, and Linux.
