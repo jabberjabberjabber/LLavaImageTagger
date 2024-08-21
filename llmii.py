@@ -22,11 +22,11 @@ def normalize_keyword(keyword):
     # Replace underscores with spaces
     keyword = re.sub(r'[_]+', ' ', keyword)
     # Remove any other non-alphanumeric characters
-    keyword = re.sub(r'[^\w\s]', '', keyword)
+    keyword = re.sub(r'[^\w\s-]', '', keyword)
     # Replace multiple spaces with a single space
     keyword = re.sub(r'\s+', ' ', keyword)
     return keyword
-
+    
 def load_spacy():
     global nlp
     if nlp is None:
@@ -36,8 +36,20 @@ def load_spacy():
     return nlp
 
 def lemmatize_keyword(keyword, nlp_model):
-    doc = nlp_model(keyword)
-    return ' '.join([token.lemma_ for token in doc])
+    doc = nlp(keyword)
+    # Use the lemma if it's different from the original word, otherwise keep the original
+    lemmatized = " ".join([token.lemma_ if token.lemma_ != token.text else token.text for token in doc])
+    lemmatized = re.sub(r'\s*-\s*', '-', lemmatized)
+    return lemmatized
+
+def process_keywords(keywords):
+    processed_keywords = set()
+    for keyword in keywords:
+        normalized = normalize_keyword(keyword)
+        lemmatized = lemmatize_keyword(normalized)
+        processed_keywords.add(lemmatized)
+    return sorted(processed_keywords)
+    
     
 def clean_string(data):
     if isinstance(data, dict):
