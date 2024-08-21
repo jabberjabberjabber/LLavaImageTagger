@@ -105,6 +105,8 @@ class Config:
         self.reprocess = False
         self.keywords_count = 7
         self.max_workers = 4
+        self.write_caption = False
+        self.image_instruction = "What do you see in the image? Be specific and descriptive"
 
     @classmethod
     def from_args(cls):
@@ -118,9 +120,11 @@ class Config:
         parser.add_argument("--write-keywords", action="store_true", help="Write Keywords metadata")
         parser.add_argument("--reprocess", action="store_true", help="Reprocess files")
         parser.add_argument("--update-keywords", action="store_true", help="Update Keywords metadata")
+        parser.add_argument("--write-caption", action="store_true", help="Write caption metadata")
         parser.add_argument("--keywords-count", type=int, default=7, help="Number of keywords to generate")
         parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of worker threads")
         parser.add_argument("--lemmatize", action="store_true", help="Apply lemmatization to keywords")
+        parser.add_argument("--image-instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
         args = parser.parse_args()
         
         config = cls()
@@ -264,7 +268,27 @@ class LLMProcessor:
             "min_p": 0.05,
         }
         return self._call_api("generate", payload)
-
+        
+    def interrogate_image(self, base64_image):       
+        """ Changing these sampler settings is not recommended.
+        """         
+        prompt = self.get_prompt(self.config.image_instruction)
+        # CPMV wants a higher temp in sampler settings
+        
+        #if "cpm" in self.model.get("name", "") or "Qwen" in self.model.get("name", ""):
+        #    temp = 0.7
+        #else:
+        temp = 0.1
+        payload = {
+            "prompt": prompt,
+            "images": [base64_image],
+            "max_length": 150,
+            "genkey": self.genkey,
+            "model": "clip",
+            "temperature": temp,
+        }
+        return self._call_api("interrogate", payload)
+        
     def _get_model(self):
         """ Calls koboldAPI and asks for the name of the running model.
             Then tries to match a string in the returned text with
@@ -489,17 +513,25 @@ class FileProcessor:
             
             output = f"---\nImage: {os.path.basename(file_path)}" 
             
-            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+            
             
             with exiftool.ExifToolHelper() as et:
                 xmp_metadata = {}        
                 xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
-            if llm_metadata["Keywords"]:
-                xmp_metadata["IPTC:Keywords"] = ""
-                xmp_metadata["XMP:Subject"] = ""
-                xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
             
+                if self.config.write_keywords or self.config.update_keywords:
+                    llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+                    if llm_metadata["Keywords"]:
+                        xmp_metadata["IPTC:Keywords"] = ""
+                        xmp_metadata["XMP:Subject"] = ""
+                        xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
+                        output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
+                    
+                elif self.config.write_caption:
+                    caption = clean_string(self.llm_processor.interrogate_image(base64_image))
+                    
+                    xmp_metadata["MWG:Description"] = caption
+                    output += "\nDescription: " + xmp_metadata["MWG:Description"]
             
                 end_time = time.time()
                 processing_time = end_time - self.start_time 

@@ -67,7 +67,14 @@ class ImageIndexerGUI(QMainWindow):
         api_layout.addWidget(QLabel("API Password:"))
         api_layout.addWidget(self.api_password_input)
         layout.addLayout(api_layout)
-
+        
+        # Image Instruction
+        image_instruction_layout = QHBoxLayout()
+        self.image_instruction_input = QLineEdit("What do you see in the image? Be specific and descriptive")
+        image_instruction_layout.addWidget(QLabel("Caption Instruction:"))
+        image_instruction_layout.addWidget(self.image_instruction_input)
+        layout.addLayout(image_instruction_layout)
+        
         # Checkboxes for options
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout()
@@ -94,14 +101,17 @@ class ImageIndexerGUI(QMainWindow):
         #self.no_keywords_radio = QRadioButton("Don't modify keywords")
         self.write_keywords_radio = QRadioButton("Clear existing keywords and write new ones")
         self.update_keywords_radio = QRadioButton("Add to existing keywords")
+        self.write_caption_radio = QRadioButton("Generate and set caption")
         
         #self.keywords_radio_group.addButton(self.no_keywords_radio)
         self.keywords_radio_group.addButton(self.write_keywords_radio)
         self.keywords_radio_group.addButton(self.update_keywords_radio)
+        self.keywords_radio_group.addButton(self.write_caption_radio)
         
         #keywords_layout.addWidget(self.no_keywords_radio)
         keywords_layout.addWidget(self.write_keywords_radio)
         keywords_layout.addWidget(self.update_keywords_radio)
+        keywords_layout.addWidget(self.write_caption_radio)
         
         # Set default selection
         self.update_keywords_radio.setChecked(True)
@@ -161,12 +171,17 @@ class ImageIndexerGUI(QMainWindow):
         if self.write_keywords_radio.isChecked():
             config.write_keywords = True
             config.update_keywords = False
+            config.write_caption = False
         elif self.update_keywords_radio.isChecked():
             config.write_keywords = False
             config.update_keywords = True
-
+            config.write_caption = False
+        elif self.write_caption_radio.isChecked():
+            config.write_keywords = False
+            config.update_keywords = False
+            config.write_caption = True
         config.keywords_count = self.keywords_count.value()
-     
+        config.image_instruction = self.image_instruction_input.text()
         self.indexer_thread = IndexerThread(config)
         self.indexer_thread.output_received.connect(self.update_output)
         self.indexer_thread.finished.connect(self.indexer_finished)
