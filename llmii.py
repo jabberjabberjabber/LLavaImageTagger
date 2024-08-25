@@ -1,19 +1,14 @@
-import os
-import logging
-import argparse
-import exiftool
-import requests
-import base64
+import os, json, time, re, logging, argparse, exiftool, requests, base64
 from PIL import Image
 import io
 import random
-import re
 from json_repair import repair_json
-import json
-import time
 import rawpy
 import uuid
 from tinydb import TinyDB, where
+import cv2
+import math
+import numpy as np
 
 nlp = None
 
@@ -105,8 +100,6 @@ class Config:
         self.reprocess = False
         self.keywords_count = 7
         self.max_workers = 4
-        self.write_caption = False
-        self.image_instruction = "What do you see in the image? Be specific and descriptive"
 
     @classmethod
     def from_args(cls):
@@ -120,11 +113,9 @@ class Config:
         parser.add_argument("--write-keywords", action="store_true", help="Write Keywords metadata")
         parser.add_argument("--reprocess", action="store_true", help="Reprocess files")
         parser.add_argument("--update-keywords", action="store_true", help="Update Keywords metadata")
-        parser.add_argument("--write-caption", action="store_true", help="Write caption metadata")
         parser.add_argument("--keywords-count", type=int, default=7, help="Number of keywords to generate")
         parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of worker threads")
         parser.add_argument("--lemmatize", action="store_true", help="Apply lemmatization to keywords")
-        parser.add_argument("--image-instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
         args = parser.parse_args()
         
         config = cls()
@@ -133,52 +124,83 @@ class Config:
         return config
         
 class ImageProcessor:
-    """ The CLIP in the LLM takes a base64 encoded image. It needs
-        an RGB JPEG or PNG file. If the image isn't one of these,
-        we try to extract a JPEG and if there isn't one we
-        just convert it to a JPEG and put that in a buffer and discard
-        it when we are done.
-    """
+
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-
-    def route_image(self, file_path, is_camera_raw=False):
+     
+    def pad_to_power_of_64(self, image):
+        
+        height, width = image.shape[:2]
+        new_width = ((width + 63) // 64) * 64 
+        new_height = ((height + 63) // 64) * 64 
+        
+        if height == new_height and width == new_width:
+            return image
+        
+        padded_image = np.zeros((new_height, new_width, 3), dtype=np.uint8)
+        padded_image[:height, :width] = image
+        
+        print(f"new_height: {new_height}, new_width: {new_width}")
+        
+        return padded_image
+        
+    def ensure_image_size(self, image):
+        height, width = image.shape[:2]
+        
+        if height >= 448 and width >= 448:
+            return self.pad_to_power_of_64(image)
+        
+        new_height = max(height, 448)
+        new_width = max(width, 448)
+        
+        padded_image = np.zeros((new_height, new_width, 3), dtype=np.uint8)
+        
+        y_offset = (new_height - height) // 2
+        x_offset = (new_width - width) // 2
+        padded_image[y_offset:y_offset+height, x_offset:x_offset+width] = image
+        
+        print(f"new_height: {new_height}, new_width: {new_width}")
+        
+        return padded_image
+        
+    def route_image(self, file_path, image_type):
         try:
-            if is_camera_raw:
-                return self.raw_to_base64_jpeg(file_path)     
-        
+            if image_type == 'RAW':
+                return self.raw_to_base64_bmp(file_path)     
+            #elif image_type in ['PNG', 'JPEG', 'BMP']:
+            #    return self.encode_file_to_base64(file_path)
+            else:
+                return self.process_image(file_path)
         except Exception as e:
-            self.logger.error(f"Image is raw but unsupported {file_path}: {str(e)}")
-        
-        return self.process_image(file_path)
-    
+            self.logger.error(f"Image unsupported {file_path}: {str(e)}")
+        return None
+                
     def process_image(self, file_path):
         try:
-            with Image.open(file_path) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                
-                jpeg_bytes = io.BytesIO()
-                img.save(jpeg_bytes, format='JPEG', quality=95)
-                jpeg_bytes.seek(0)
-                base64_encoded = base64.b64encode(jpeg_bytes.getvalue()).decode('utf-8')
+            img = cv2.imread(file_path)
+            if img is None:
+                raise ValueError(f"Unable to read image: {file_path}")
             
-            return base64_encoded
-
+            img = self.ensure_image_size(img)
+            
+            _, bmp_data = cv2.imencode('.bmp', img)
+            
+            return base64.b64encode(bmp_data).decode('utf-8')
         except Exception as e:
-            self.logger.error(f"Error processing image: {str(e)}")
+            self.logger.error(f"Error processing {file_path}: {str(e)}")
             return None
-    
-    def raw_to_base64_jpeg(self, file_path):
+        
+    def raw_to_base64_bmp(self, file_path):
         try:
             with rawpy.imread(file_path) as raw:
                 rgb = raw.postprocess()
-            img = Image.fromarray(rgb)
-            jpeg_bytes = io.BytesIO()
-            img.save(jpeg_bytes, format='JPEG', quality=95)
-            jpeg_bytes.seek(0)
-            base64_encoded = base64.b64encode(jpeg_bytes.getvalue()).decode('utf-8')
-            return base64_encoded
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            
+            img = self.ensure_image_size(bgr)
+            
+            _, bmp_data = cv2.imencode('.bmp', img)
+            
+            return base64.b64encode(bmp_data).decode('utf-8')
         except Exception as e:
             self.logger.error(f"Error processing {file_path}: {str(e)}")
             return None
@@ -199,7 +221,9 @@ class LLMProcessor:
         
         # this prompt works well, you can change it if you want, but comment it out in
         # case you want to use it again.
-        self.metadata_instruction = f"Generate a list of keywords for the image for searching and catagorizing which will encompass some or all of the following: the PEOPLE in the image including GENDER, AGE, PHYSICAL DESCRIPTION and ETHNICITY; concepts; actions; relationships; profession; overall subject; setting; the technical and framing aspects of shot; any animals or objects. Do not create keywords for things that are not in the image. Generate no fewer than {self.config.keywords_count} IPTC keywords. Generate only a JSON formated object with key Keywords and a single list of keywords.\n"
+
+        self.metadata_instruction = f"Generate a list of IPTC keywords for the image you see. Each keyword will be a one or two words and will describe each of the following as applicable and separately:\nobjects, people, animals, gender, race, physical appearance, clothing, style, subject, actions, subject, shot framing, professions, relationships, setting, location, concepts, colors, and anything else relevant.\n\nReturn formatted as a JSON object with key Keywords with a single list of keywords as the value.\n\n"
+        
         self.api_url = config.api_url
         self.headers = {
             "Content-Type": "application/json",
@@ -225,7 +249,7 @@ class LLMProcessor:
         self.max_context = self._get_max_context_length()
 
     def _call_api(self, api_function, payload=None):
-        """ The magic part where we talk to koboldAPI. Open the browser
+        """ The part where we talk to koboldAPI. Open the browser
             and go to http://localhost:5001/api to see all the options.
         """
         if api_function not in self.api_function_urls:
@@ -268,27 +292,7 @@ class LLMProcessor:
             "min_p": 0.05,
         }
         return self._call_api("generate", payload)
-        
-    def interrogate_image(self, base64_image):       
-        """ Changing these sampler settings is not recommended.
-        """         
-        prompt = self.get_prompt(self.config.image_instruction)
-        # CPMV wants a higher temp in sampler settings
-        
-        #if "cpm" in self.model.get("name", "") or "Qwen" in self.model.get("name", ""):
-        #    temp = 0.7
-        #else:
-        temp = 0.1
-        payload = {
-            "prompt": prompt,
-            "images": [base64_image],
-            "max_length": 150,
-            "genkey": self.genkey,
-            "model": "clip",
-            "temperature": temp,
-        }
-        return self._call_api("interrogate", payload)
-        
+
     def _get_model(self):
         """ Calls koboldAPI and asks for the name of the running model.
             Then tries to match a string in the returned text with
@@ -365,17 +369,62 @@ class FileProcessor:
             self.callback("Loaded spaCy for lemmatization")
         
         # add more tags here if needed
-        self.exiftool_fields = ["XMP:Description", "Subject", "Keywords", "XMP:Identifier"]
+        self.exiftool_fields = ["XMP:Description", "Subject", "Keywords", "XMP:Identifier", "FileType"]
         
-        # add more extensions here if needed
-        self.file_extensions = {".arw", ".cr2", ".dng", ".gif", ".jpeg", ".tif", ".tiff", ".jpg", ".nef", ".orf", ".pef", ".png", ".raf", ".rw2", ".srw"}
-        
-        self.raw_extensions = {".arw", ".cr2", ".dng", ".nef", ".orf", ".pef", ".raf", ".rw2", ".srw"}
         # untested:
         # arq, crm, cr3, crw, ciff, erf, fff, flif, gpr, hdp, wdp,
         # heif, hif, iiq, insp, jpf, jpm, jpx, jph, mef, mos, mpo,
         # nrw, ori, jng, mng, qtif, qti, qif, sr2, x3f
-                
+        self.image_extensions = {
+            "JPEG": [".jpg", ".jpeg", ".jpe", ".jif", ".jfif", ".jfi", ".jp2", ".j2k", ".jpf", ".jpx", ".jpm", ".mj2"],
+            "PNG": [".png"],
+            "GIF": [".gif"],
+            "TIFF": [".tiff", ".tif"],
+            "BMP": [".bmp", ".dib"],
+            #"WebP": [".webp"],
+            "SVG": [".svg", ".svgz"],
+            "ICO": [".ico"],
+            "RAW": [
+                ".raw",  # Generic RAW
+                ".arw",  # Sony
+                ".cr2",  # Canon
+                ".cr3",  # Canon (newer format)
+                ".dng",  # Adobe Digital Negative
+                ".nef",  # Nikon
+                ".nrw",  # Nikon
+                ".orf",  # Olympus
+                ".pef",  # Pentax
+                ".raf",  # Fujifilm
+                ".rw2",  # Panasonic
+                ".srw",  # Samsung
+                ".x3f",  # Sigma
+                ".erf",  # Epson
+                ".kdc",  # Kodak
+                ".rwl",  # Leica
+            ],
+        }
+            #"PSD": [".psd"],
+            #"HEIF": [".heif", ".heic"],
+            #"EPS": [".eps", ".epsf", ".epsi"],
+            #"AI": [".ai"],
+            #"PDF": [".pdf"],  # Not strictly an image format, but often used for images
+            #"XCF": [".xcf"],  # GIMP format
+            #"PPM": [".ppm", ".pgm", ".pbm", ".pnm"],  # Netpbm formats
+            #"WEBM": [".webm"],  # Video format that can contain still images
+            
+    def get_file_type(self, file_ext):
+        
+        if not file_ext.startswith('.'):
+            file_ext = '.' + file_ext
+        
+        file_ext = file_ext.lower()
+        
+        for file_type, extensions in self.image_extensions.items():
+            if file_ext in [ext.lower() for ext in extensions]:
+                return file_type
+        
+        return None
+        
     def check_uuid(self, metadata):
         try:
             
@@ -419,8 +468,7 @@ class FileProcessor:
         for filename in os.listdir(directory):
             file_path = os.path.join(directory, filename)
             if os.path.isfile(file_path):
-                file_extension = os.path.splitext(filename)[1].lower()
-                if file_extension in self.file_extensions:
+                if self.get_file_type(os.path.splitext(filename)[1].lower()): 
                     files.append(file_path)
         if files:
             self.files_in_queue += len(files) 
@@ -433,10 +481,11 @@ class FileProcessor:
         self.running_time = 0
         metadata_list = []
         try:
-            with exiftool.ExifToolHelper(logger=logging.getLogger(__name__)) as et:
+            with exiftool.ExifToolHelper() as et:
+                #et.set_json_loads(ujson.loads)
                 metadata_list = et.get_tags(files, self.exiftool_fields)
         except Exception as e:
-            self.logger.error(f"Error processing directory {directory}: {str(e)}")
+            pass
         
         print(f"Number of files to process: {len(metadata_list)}")
         
@@ -455,12 +504,11 @@ class FileProcessor:
             metadata_added = self.check_uuid(metadata)
             if metadata_added is not None:
                 metadata = metadata_added    
-                file_extension = os.path.splitext(file_path)[1].lower()
-                self.start_time = time.time()
+                image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
+                if image_type is not None:
+                    self.start_time = time.time()
                 
-                if file_extension in self.file_extensions:
-                    is_camera_raw = file_extension in self.raw_extensions
-                    image_object_or_path = self.image_processor.route_image(file_path, is_camera_raw)
+                    image_object_or_path = self.image_processor.route_image(file_path, image_type)
                     
                     if image_object_or_path:
                         self.update_metadata(metadata, image_object_or_path)
@@ -479,6 +527,14 @@ class FileProcessor:
             self.logger.error(f"Error processing file {file_path}: {str(e)}")
             self.files_done += 1
     
+    def extract_values(self, data):
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            return [item for sublist in data.values() for item in (extract_values(sublist) if isinstance(sublist, (dict, list)) else [sublist])]
+        else:
+            return []
+            
     def process_keywords(self, metadata, llm_metadata):
         """ Normalize and optionally lemmatize all keywords. If update is configured,
             combine the old and new keywords.
@@ -487,9 +543,12 @@ class FileProcessor:
         
         if self.config.update_keywords:
             all_keywords.update(metadata.get("IPTC:Keywords", []))
+            all_keywords.update(metadata.get("MWG:Keywords", []))
+            all_keywords.update(metadata.get("Keywords", []))
             all_keywords.update(metadata.get("XMP:Subject", []))
         
-        all_keywords.update(llm_metadata.get("Keywords", []))
+        extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
+        all_keywords.update(extracted_keywords)
         processed_keywords = set()
         
         for keyword in all_keywords:
@@ -501,37 +560,22 @@ class FileProcessor:
         return list(processed_keywords)
     
     def update_metadata(self, metadata, base64_image):
-        """ clean_string and clean_json are vital here to ensure useable output
-            from the LLM. If they are ommitted we will not get a json object and
-            everything will break.
-            We query the LLM twice. Once with the image asking for a description,
-            and a second time with the description and the metadata asking
-            for a JSON object.
-        """        
+     
         try:
             file_path = metadata["SourceFile"]
             
             output = f"---\nImage: {os.path.basename(file_path)}" 
             
+            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+      
+            xmp_metadata = {}        
+            xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
+            if llm_metadata["Keywords"]:
+                xmp_metadata["IPTC:Keywords"] = ""
+                xmp_metadata["XMP:Subject"] = ""
+                xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
+                output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
             
-            
-            with exiftool.ExifToolHelper() as et:
-                xmp_metadata = {}        
-                xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
-            
-                if self.config.write_keywords or self.config.update_keywords:
-                    llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
-                    if llm_metadata["Keywords"]:
-                        xmp_metadata["IPTC:Keywords"] = ""
-                        xmp_metadata["XMP:Subject"] = ""
-                        xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                        output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
-                    
-                elif self.config.write_caption:
-                    caption = clean_string(self.llm_processor.interrogate_image(base64_image))
-                    
-                    xmp_metadata["MWG:Description"] = caption
-                    output += "\nDescription: " + xmp_metadata["MWG:Description"]
             
                 end_time = time.time()
                 processing_time = end_time - self.start_time 
@@ -542,14 +586,16 @@ class FileProcessor:
                 
                 if not self.config.dry_run:
                     if self.config.overwrite:
-                        et.set_tags(
-                            file_path,
-                            tags=xmp_metadata,
-                            params=["-P", "-overwrite_original"],
-                        )
+                        with exiftool.ExifToolHelper() as et:
+                            et.set_tags(
+                                file_path,
+                                tags=xmp_metadata,
+                                params=["-P", "-overwrite_original"],
+                            )
                         self.update_db(xmp_metadata)
                     else:
-                        et.set_tags(file_path, tags=xmp_metadata)
+                        with exiftool.ExifToolHelper() as et:
+                            et.set_tags(file_path, tags=xmp_metadata)
                         self.update_db(xmp_metadata)
                 
                 self.callback(callback_output)
