@@ -1,4 +1,4 @@
-import os, json, time, re, logging, argparse, exiftool, requests, base64
+import os, json, time, re, argparse, exiftool, requests, base64
 from PIL import Image
 import io
 import random
@@ -9,6 +9,9 @@ from tinydb import TinyDB, where
 import cv2
 import math
 import numpy as np
+from datetime import timedelta
+from fix_busted_json import largest_json
+import imageio
 
 nlp = None
 
@@ -126,7 +129,7 @@ class Config:
 class ImageProcessor:
 
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        pass
      
     def pad_to_power_of_64(self, image):
         
@@ -166,22 +169,29 @@ class ImageProcessor:
     def route_image(self, file_path, image_type):
         try:
             if image_type == 'RAW':
-                return self.raw_to_base64_bmp(file_path)     
-            #elif image_type in ['PNG', 'JPEG', 'BMP']:
-            #    return self.encode_file_to_base64(file_path)
+                return self.process_raw_image(file_path)   
+                
+            elif image_type in ['PNG', 'JPEG', 'BMP']:
+                return self.encode_file_to_base64(file_path)
+                
             else:
                 return self.process_image(file_path)
+                
         except Exception as e:
             self.logger.error(f"Image unsupported {file_path}: {str(e)}")
         return None
-                
+        
+    def encode_file_to_base64(self, file_path):
+        with open(file_path, 'rb') as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')    
+            
     def process_image(self, file_path):
         try:
             img = cv2.imread(file_path)
             if img is None:
                 raise ValueError(f"Unable to read image: {file_path}")
             
-            img = self.ensure_image_size(img)
+            #img = self.ensure_image_size(img)
             
             _, bmp_data = cv2.imencode('.bmp', img)
             
@@ -196,14 +206,31 @@ class ImageProcessor:
                 rgb = raw.postprocess()
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             
-            img = self.ensure_image_size(bgr)
+            #img = self.ensure_image_size(bgr)
             
-            _, bmp_data = cv2.imencode('.bmp', img)
+            _, bmp_data = cv2.imencode('.bmp', bgr)
             
             return base64.b64encode(bmp_data).decode('utf-8')
         except Exception as e:
             self.logger.error(f"Error processing {file_path}: {str(e)}")
             return None
+            
+    def process_raw_image(self, file_path):
+        with rawpy.imread(file_path) as raw:
+            try:
+                thumb = raw.extract_thumb()
+                if thumb.format == rawpy.ThumbFormat.JPEG:
+                    return base64.b64encode(thumb.data).decode('utf-8')
+            except:
+                pass
+            
+            rgb = raw.postprocess()
+            img = Image.fromarray(rgb)
+            
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG")
+            return base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
 
 class LLMProcessor:    
     def __init__(self, config):
@@ -357,11 +384,9 @@ class FileProcessor:
         self.config = config
         self.image_processor = image_processor
         self.llm_processor = LLMProcessor(config)
-        self.logger = logging.getLogger(__name__)
         self.check_paused_or_stopped = check_paused_or_stopped
         self.callback = callback
-        self.files_in_queue = 0
-        self.files_done = 1
+        self.files_in_queue = 1
         self.db = TinyDB("filedata.json")
         self.nlp_model = None
         if self.config.lemmatize:
@@ -443,7 +468,7 @@ class FileProcessor:
                 return metadata
                 
         except Exception as e:
-            self.logger.error(f"Error checking for duplicate: {str(e)}")
+            print(f"Error checking UUID")
             return None
 
     def update_db(self, metadata):
@@ -452,7 +477,7 @@ class FileProcessor:
             print(f"DB Updated with UUID: {metadata.get('XMP:Identifier')}")
             return 
         except: 
-            self.logger.error(f"Error storing metadata: {str(e)}")
+            print(f"Error updating DB with UUID: {metadata.get('XMP:Identifier')}")
             return False
             
     def check_pause_stop(self):
@@ -476,7 +501,6 @@ class FileProcessor:
         return files
         
     def process_directory(self, directory):
-        logging.basicConfig(level=logging.DEBUG)
         files = self.list_files(directory)
         self.running_time = 0
         metadata_list = []
@@ -485,26 +509,30 @@ class FileProcessor:
                 #et.set_json_loads(ujson.loads)
                 metadata_list = et.get_tags(files, self.exiftool_fields)
         except Exception as e:
-            pass
+            print(f"Error loading Exiftool")
         
-        print(f"Number of files to process: {len(metadata_list)}")
+        #print(f"Number of files to process: {len(metadata_list)}")
         
         for metadata in metadata_list:
             if self.check_pause_stop():
                 return
             print(f"Processing file: {metadata.get('SourceFile', 'unknown')}")
-            print(f"{repr(metadata)}")
+            #print(f"{repr(metadata)}")
             self.process_file(metadata)
     
     def process_file(self, metadata):
-        self.files_left = abs(self.files_done - self.files_in_queue)
+        self.files_in_queue -= 1
         
         try:
             file_path = metadata['SourceFile']
             metadata_added = self.check_uuid(metadata)
-            if metadata_added is not None:
+            if metadata_added is None:
+                print(f"File {file_path} has already been processed or is a duplicate")
+                return
+            else:
                 metadata = metadata_added    
                 image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
+                
                 if image_type is not None:
                     self.start_time = time.time()
                 
@@ -513,20 +541,14 @@ class FileProcessor:
                     if image_object_or_path:
                         self.update_metadata(metadata, image_object_or_path)
                         
-                        
-                        self.files_done += 1
                     if self.check_pause_stop():
                         return    
                 else:
                     print(f"Not a supported image type: {file_path}")                    
-                    self.files_done += 1
-            else:
-                print(f"File {file_path} has already been processed or is a duplicate")
-                self.files_done += 1
+                
         except Exception as e:
-            self.logger.error(f"Error processing file {file_path}: {str(e)}")
-            self.files_done += 1
-    
+            print(f"Error processing: {file_path}")
+            
     def extract_values(self, data):
         if isinstance(data, list):
             return data
@@ -544,7 +566,7 @@ class FileProcessor:
         if self.config.update_keywords:
             all_keywords.update(metadata.get("IPTC:Keywords", []))
             all_keywords.update(metadata.get("MWG:Keywords", []))
-            all_keywords.update(metadata.get("Keywords", []))
+            #all_keywords.update(metadata.get("Keywords", []))
             all_keywords.update(metadata.get("XMP:Subject", []))
         
         extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
@@ -559,15 +581,40 @@ class FileProcessor:
 
         return list(processed_keywords)
     
+    def calculate_processing_times(self):
+        end_time = time.time()
+        processing_time = end_time - self.start_time
+
+        if not hasattr(self, 'number_completed'):
+            self.number_completed = 0
+        self.number_completed += 1
+
+        if not hasattr(self, 'total_processing_time'):
+            self.total_processing_time = 1
+        self.total_processing_time += processing_time
+
+        avg_processing_time = self.total_processing_time / self.number_completed
+        estimated_time_left = avg_processing_time * self.files_in_queue
+
+        processing_time_str = str(timedelta(seconds=int(processing_time)))
+        estimated_time_left_str = str(timedelta(seconds=int(estimated_time_left)))
+
+        return {
+            'processing_time': processing_time_str,
+            'estimated_time_left': estimated_time_left_str,
+            'files_remaining': self.files_in_queue
+        }
+
     def update_metadata(self, metadata, base64_image):
-     
+        write_it = False
         try:
             file_path = metadata["SourceFile"]
             
             output = f"---\nImage: {os.path.basename(file_path)}" 
             
-            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
-      
+            #llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+            llm_metadata = clean_json(largest_json(self.llm_processor.describe_content(base64_image)))
+            print(repr(llm_metadata))
             xmp_metadata = {}        
             xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
             if llm_metadata["Keywords"]:
@@ -575,42 +622,34 @@ class FileProcessor:
                 xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
                 output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
-            
-            
-                end_time = time.time()
-                processing_time = end_time - self.start_time 
-                self.running_time = processing_time + self.running_time 
-                self.average_time = self.running_time / self.files_done
-                self.finish_time = self.average_time * self.files_left
-                callback_output = f"{output}\n---\nCompleted image number {self.files_done} in {processing_time:.2f} seconds. There are {self.files_left} images remaining to be processed in this folder. Estimated time to finish is {self.finish_time:.2f} seconds from now." 
+                write_it = True
+            callback_output = output
+            #result = self.calculate_processing_times()
+            #callback_output = f"{output}\n---\nProcessed {file_path} in {result['processing_time']}. Estimated time left: {result['estimated_time_left']}. Files remaining: {result['files_remaining']}"  
                 
-                if not self.config.dry_run:
-                    if self.config.overwrite:
-                        with exiftool.ExifToolHelper() as et:
-                            et.set_tags(
-                                file_path,
-                                tags=xmp_metadata,
-                                params=["-P", "-overwrite_original"],
-                            )
-                        self.update_db(xmp_metadata)
-                    else:
-                        with exiftool.ExifToolHelper() as et:
-                            et.set_tags(file_path, tags=xmp_metadata)
-                        self.update_db(xmp_metadata)
+            if not self.config.dry_run and write_it:
+                if self.config.overwrite:
+  
+                    et.set_tags(
+                        file_path,
+                        tags=xmp_metadata,
+                        params=["-P", "-overwrite_original"],
+                    )
+                    self.update_db(xmp_metadata)
+                else:
+                    with exiftool.ExifToolHelper() as et:
+                        et.set_tags(file_path, tags=xmp_metadata)
+                    self.update_db(xmp_metadata)
                 
-                self.callback(callback_output)
+            self.callback(callback_output)
                     
         except Exception as e:
-            self.logger.error(f"Error updating metadata for {metadata.get('SourceFile', 'unknown')}: {str(e)}")      
+            print(f"Error updating metadata for {file_path}:  {str(e)}")
 
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
-    
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
-    
-    logger.info("Initializing components...")
+
     image_processor = ImageProcessor()
     
     file_processor = FileProcessor(config, image_processor, check_paused_or_stopped, callback)
@@ -620,7 +659,7 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
             file_processor.process_directory(config.directory)
             
         except Exception as e:
-            logger.error(f"An error occurred during processing: {str(e)}")
+            print(f"An error occurred during processing: {str(e)}")
             if callback:
                 callback(f"Error: {str(e)}")
     else:
@@ -628,7 +667,7 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
         
         for directory in directories:
             if check_paused_or_stopped and check_paused_or_stopped():
-                logger.info("Processing stopped by user.")
+                print("Processing stopped by user.")
                 break
             try:
                 file_processor.process_directory(directory)
