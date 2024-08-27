@@ -73,7 +73,7 @@ class ImageIndexerGUI(QMainWindow):
         options_layout = QVBoxLayout()
         self.no_crawl_checkbox = QCheckBox("Don't crawl subdirectories")
         self.reprocess_checkbox = QCheckBox("Process files even if previously processed")
-        self.lemmatize_checkbox = QCheckBox("Lemmatize keywords (example: run, ran, running all become run)", checked=True)
+        self.lemmatize_checkbox = QCheckBox("Lemmatize keywords (example: run, ran, running all become run)")
         self.overwrite_checkbox = QCheckBox("Don't make backups before writing")
         self.dry_run_checkbox = QCheckBox("Pretend mode (see what happens without writing)")
         options_layout.addWidget(self.no_crawl_checkbox)
