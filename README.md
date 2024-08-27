@@ -144,7 +144,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [ExifTool](https://exiftool.org/) for metadata manipulation
 - [KoboldCPP](https://github.com/LostRuins/koboldcpp) for local AI processing
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) for the GUI framework
-
+- [Fix Busted JSON](https://github.com/Qarj/fix-busted-json) for help with mangled JSON parsing
 ## Disclaimer
 
 This tool is designed for personal use and should be used responsibly. Always ensure you have the right to modify and tag the images you process.
