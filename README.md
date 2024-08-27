@@ -124,6 +124,11 @@ For all platforms, the script will set up the Python environment, install depend
 - If you encounter issues with ExifTool, ensure it's properly installed and accessible in your system PATH.
 - Make sure KoboldCPP is running and the API URL in the GUI matches the KoboldCPP endpoint.
 - Check the output area in the GUI for error messages and warnings.
+- If the output window says it finished but it didn't do anything, make sure the folder you pointed it to exists.
+- Make sure you are always using the latest version of KoboldCPP. It gets updated very frequently (multiple times per month).
+- If the downloaded model is not to your liking, is too slow, or to big, you can choose any model you like! Find a gguf and matching projector and run koboldcpp.exe and load them and then run llmii-no-kobold.bat
+- If you are using your own model and are getting strange results, make sure that the projector matches (Llama-3.1-8b must have a matching Llama-3.1-8b-mmproj with it, for example)
+- If you are using your own model and are still getting strange results, make sure that the name of the gguf matches at least partially the name of the base model it was trained on (llava-v1.6-34b.gguf should be named llava-vicuna-v1.6-34b.gguf for example). This is because the prompt templates are chosen automatically using the model's filename! 
 - On macOS or Linux, if you get a "permission denied" error when running KoboldCPP, make sure you've made the binary executable with `chmod +x`.
 
 ## Contributing
