@@ -350,8 +350,7 @@ class FileProcessor:
         if self.config.lemmatize:
             self.nlp_model = load_spacy()
             self.callback("Loaded spaCy for lemmatization")
-        
-        # add more tags here if needed
+
         self.exiftool_fields = ["XMP:Description", "Subject", "Keywords", "XMP:Identifier", "FileType"]
         
         # untested formats:
@@ -430,7 +429,10 @@ class FileProcessor:
         except: 
             print(f"Error updating DB with UUID: {metadata.get('XMP:Identifier')}")
             return False
-            
+    def mark_for_retry(self, metadata):
+        metadata['status'] = 'retry'
+        self.update_db(metadata)        
+    
     def check_pause_stop(self):
         if self.check_paused_or_stopped():
             while self.check_paused_or_stopped():
@@ -458,7 +460,9 @@ class FileProcessor:
         try:
             with exiftool.ExifToolHelper() as et:
                 metadata_list = et.get_tags(files, self.exiftool_fields)
+        
         except Exception as e:
+            self.callback(f"Directory has no images: {directory}")
             print(f"Error loading Exiftool")
         
         
@@ -483,7 +487,7 @@ class FileProcessor:
             metadata_added = self.check_uuid(metadata)
             
             if metadata_added is None:
-                print(f"File {file_path} has already been processed or is a duplicate")
+                #print(f"File {file_path} has already been processed or is a duplicate")
                 return
                 
             else:
@@ -506,7 +510,8 @@ class FileProcessor:
                     image_object_or_path = self.image_processor.route_image(file_path, image_type)
                     
                     if image_object_or_path:
-                        self.update_metadata(metadata, image_object_or_path)
+                        if not self.update_metadata(metadata, image_object_or_path):
+                            self.mark_for_retry(metadata)
                         
                     if self.check_pause_stop():
                         return    
@@ -515,7 +520,7 @@ class FileProcessor:
                 
         except Exception as e:
             print(f"Error processing: {file_path}")
-            
+                                
     def extract_values(self, data):
         if isinstance(data, list):
             return data
@@ -551,76 +556,114 @@ class FileProcessor:
 
         return list(processed_keywords)
     
+    def get_metadata(self, file_path):
+        try:
+            with exiftool.ExifToolHelper() as et:
+                metadata = et.get_tags([file_path], self.exiftool_fields)[0]
+            return metadata
+        except Exception as e:
+            print(f"Error getting metadata for {file_path}: {str(e)}")
+            return None
+            
+    
     def update_metadata(self, metadata, base64_image):
-
         write = False
         file_path = metadata["SourceFile"]
             
-            
         try:
             llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
-            xmp_metadata = {}        
-            xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
             if llm_metadata["Keywords"] or llm_metadata["keywords"]:
+                xmp_metadata = {}
+                xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
                 xmp_metadata["IPTC:Keywords"] = ""
                 xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords","")) + "\nFiles remaining in queue: {self.files_in_queue}"  
-                write = True
+                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords","")) + f"\nFiles remaining in queue: {self.files_in_queue}"  
         except:
             print(f"CANNOT parse keywords for {file_path}\n")
+            return False
      
         try:    
-            if not self.config.dry_run and write:
-                if self.config.overwrite:
-  
+            if self.config.dry_run:
+                self.callback(f"{output}\nNOT written to because an because pretend mode is set.\n")
+                return True 
+            elif self.config.overwrite:
+                with exiftool.ExifToolHelper() as et:
                     et.set_tags(
                         file_path,
                         tags=xmp_metadata,
                         params=["-P", "-overwrite_original"],
                     )
-                    self.update_db(xmp_metadata)
-                    self.callback(output)
-                else:
-                    with exiftool.ExifToolHelper() as et:
-                        et.set_tags(file_path, tags=xmp_metadata)
-                    self.update_db(xmp_metadata)
-                    
-                    self.callback(output)
-            else:    
-                self.callback(f"File {file_path} was NOT written to because of an error or because dry_run is set.\n")
-                    
+                self.update_db(xmp_metadata)
+                self.callback(output)
+                return True
+            else:
+                with exiftool.ExifToolHelper() as et:
+                    et.set_tags(file_path, tags=xmp_metadata)
+                self.update_db(xmp_metadata) 
+                self.callback(output)
+                return True  
+           
         except Exception as e:
             print(f"Error updating metadata for {file_path}:  {str(e)}")
+            return False
 
+    def process_retry_files(self):
+        retry_files = self.db.search(where('status') == 'retry')
+        self.callback(f"Retrying {len(retry_files)} files...")
+        
+        for metadata in retry_files:
+            if self.check_pause_stop():
+                return
+            self.process_file(metadata)
+            
+        failed_files = self.db.search(where('status') == 'retry')
+        if failed_files:
+            self.callback(f"Files that still failed after retry: {len(failed_files)}")
+            for metadata in failed_files:
+                metadata['status'] = 'failed'
+                self.update_db(metadata)
+                self.callback(f"Failed file: {metadata['SourceFile']}")
+        else:
+            self.callback("All retry files processed successfully.")
+            
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
 
     image_processor = ImageProcessor()
-    
+
     file_processor = FileProcessor(config, image_processor, check_paused_or_stopped, callback)
 
     if config.no_crawl:
         try:
             file_processor.process_directory(config.directory)
-            
         except Exception as e:
             print(f"An error occurred during processing: {str(e)}")
             if callback:
                 callback(f"Error: {str(e)}")
     else:
         directories = [root for root, _, _ in os.walk(config.directory)]
-        
+
         for directory in directories:
             if check_paused_or_stopped and check_paused_or_stopped():
                 print("Processing stopped by user.")
                 break
             try:
                 file_processor.process_directory(directory)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error processing directory {directory}: {str(e)}")
 
+    # Final pass to retry failed files
+    file_processor.process_retry_files()
+
+    failed_files = file_processor.db.search(where('status') == 'failed')
+    if failed_files:
+        callback(f"Files that failed after retry: {len(failed_files)}")
+        for metadata in failed_files:
+            callback(f"Failed file: {metadata['SourceFile']}")
+    else:
+        callback("All files processed successfully.")
 
 if __name__ == "__main__":
     main()
