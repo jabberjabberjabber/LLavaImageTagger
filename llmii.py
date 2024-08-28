@@ -553,7 +553,7 @@ class FileProcessor:
     
     def update_metadata(self, metadata, base64_image):
 
-        
+        write = False
         file_path = metadata["SourceFile"]
             
             
@@ -565,14 +565,13 @@ class FileProcessor:
                 xmp_metadata["IPTC:Keywords"] = ""
                 xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords",""))
-                output += f"\nFiles remaining in queue: {self.files_in_queue}"  
-                
+                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords","")) + "\nFiles remaining in queue: {self.files_in_queue}"  
+                write = True
         except:
             print(f"CANNOT parse keywords for {file_path}\n")
      
         try:    
-            if not self.config.dry_run and output:
+            if not self.config.dry_run and write:
                 if self.config.overwrite:
   
                     et.set_tags(
@@ -581,12 +580,13 @@ class FileProcessor:
                         params=["-P", "-overwrite_original"],
                     )
                     self.update_db(xmp_metadata)
+                    self.callback(output)
                 else:
                     with exiftool.ExifToolHelper() as et:
                         et.set_tags(file_path, tags=xmp_metadata)
                     self.update_db(xmp_metadata)
                     
-                self.callback(output)
+                    self.callback(output)
             else:    
                 self.callback(f"File {file_path} was NOT written to because of an error or because dry_run is set.\n")
                     
