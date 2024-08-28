@@ -553,7 +553,7 @@ class FileProcessor:
     
     def update_metadata(self, metadata, base64_image):
 
-        output = ""
+        
         file_path = metadata["SourceFile"]
             
             
@@ -566,7 +566,7 @@ class FileProcessor:
                 xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
                 output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords",""))
-            output += f"\nFiles remaining in queue: {self.files_in_queue}"  
+                output += f"\nFiles remaining in queue: {self.files_in_queue}"  
                 
         except:
             print(f"CANNOT parse keywords for {file_path}\n")
