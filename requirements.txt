@@ -1,12 +1,11 @@
 spacy
 numpy==1.26.4
 pyexiftool
-json_repair
 requests
 pyqt6
 pillow
 rawpy
 tinydb
 opencv-python
-imageio
-
+json_repair
+pillow-heif

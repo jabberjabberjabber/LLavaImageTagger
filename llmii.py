@@ -1,17 +1,14 @@
 import os, json, time, re, argparse, exiftool, requests, base64
+from pillow_heif import register_heif_opener
 from PIL import Image
 import io
 import random
-from json_repair import repair_json
 import rawpy
 import uuid
 from tinydb import TinyDB, where
-import cv2
-import math
-import numpy as np
+from json_repair import repair_json as rj
 from datetime import timedelta
-from fix_busted_json import largest_json
-import imageio
+from fix_busted_json import first_json
 
 nlp = None
 
@@ -40,6 +37,7 @@ def lemmatize_keyword(keyword, nlp_model):
     lemmatized = re.sub(r'\s*-\s*', '-', lemmatized)
     return lemmatized
 
+"""
 def process_keywords(keywords):
     processed_keywords = set()
     for keyword in keywords:
@@ -47,7 +45,7 @@ def process_keywords(keywords):
         lemmatized = lemmatize_keyword(normalized)
         processed_keywords.add(lemmatized)
     return sorted(processed_keywords)
-    
+"""    
     
 def clean_string(data):
     if isinstance(data, dict):
@@ -63,32 +61,39 @@ def clean_string(data):
 
 def clean_json(data):
     if data is None:
-        return ""
+        return {"Keywords": []}
     if isinstance(data, dict):
-        data = json.dumps(data)
+        return data  # If it's already a dict, just return it
+    if isinstance(data, str):
+        # Try to extract JSON from the string
+        pattern = r"```json\s*(.*?)\s*```"
+        match = re.search(pattern, data, re.DOTALL)
+        if match:
+            data = match.group(1).strip()
+        else:
+            # If no JSON block found, try to find anything that looks like JSON
+            json_str = re.search(r"\{.*\}", data, re.DOTALL)
+            if json_str:
+                data = json_str.group(0)
+
+        data = re.sub(r"\n", " ", data)
+        data = re.sub(r'["""]', '"', data)
+
         try:
-            return json.loads(data)
-        except:
-            pass
-    pattern = r"```json\s*(.*?)\s*```"
-    match = re.search(pattern, data, re.DOTALL)
-
-    if match:
-        json_str = match.group(1).strip()
-        data = json_str
-    else:
-        json_str = re.search(r"\{.*\}", data, re.DOTALL)
-        if json_str:
-            data = json_str.group(0)
-
-    data = re.sub(r"\n", " ", data)
-    data = re.sub(r'["""]', '"', data)
-
-    try:
-        return json.loads(repair_json(data))
-    except json.JSONDecodeError:
-        print("JSON error")
-    return data
+            return json.loads(rj(data))
+        except json.JSONDecodeError:
+            try:
+                return json.loads(first_json(rj(data)))
+            except:
+                try:
+                    return json.loads(first_json(rj('{' + data + '}')))
+                except:
+                    try:
+                        return json.loads(rj('{' + data + '}'))
+                    except:
+                        print(f"Failed to parse JSON: {data}")
+                        return {"Keywords": []}
+    return {"Keywords": []}
     
 class Config:
     def __init__(self):
@@ -129,51 +134,15 @@ class Config:
 class ImageProcessor:
 
     def __init__(self):
-        pass
+       
+        register_heif_opener()
      
-    def pad_to_power_of_64(self, image):
-        
-        height, width = image.shape[:2]
-        new_width = ((width + 63) // 64) * 64 
-        new_height = ((height + 63) // 64) * 64 
-        
-        if height == new_height and width == new_width:
-            return image
-        
-        padded_image = np.zeros((new_height, new_width, 3), dtype=np.uint8)
-        padded_image[:height, :width] = image
-        
-        print(f"new_height: {new_height}, new_width: {new_width}")
-        
-        return padded_image
-        
-    def ensure_image_size(self, image):
-        height, width = image.shape[:2]
-        
-        if height >= 448 and width >= 448:
-            return self.pad_to_power_of_64(image)
-        
-        new_height = max(height, 448)
-        new_width = max(width, 448)
-        
-        padded_image = np.zeros((new_height, new_width, 3), dtype=np.uint8)
-        
-        y_offset = (new_height - height) // 2
-        x_offset = (new_width - width) // 2
-        padded_image[y_offset:y_offset+height, x_offset:x_offset+width] = image
-        
-        print(f"new_height: {new_height}, new_width: {new_width}")
-        
-        return padded_image
-        
     def route_image(self, file_path, image_type):
         try:
             if image_type == 'RAW':
                 return self.process_raw_image(file_path)   
-                
             elif image_type in ['PNG', 'JPEG', 'BMP']:
                 return self.encode_file_to_base64(file_path)
-                
             else:
                 return self.process_image(file_path)
                 
@@ -187,54 +156,40 @@ class ImageProcessor:
             
     def process_image(self, file_path):
         try:
-            img = cv2.imread(file_path)
-            if img is None:
-                raise ValueError(f"Unable to read image: {file_path}")
-            
-            #img = self.ensure_image_size(img)
-            
-            _, bmp_data = cv2.imencode('.bmp', img)
-            
-            return base64.b64encode(bmp_data).decode('utf-8')
+            with Image.open(file_path) as img:
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+
+                buffer = io.BytesIO()
+                img.save(buffer, format='PNG')
+                png_data = buffer.getvalue()
+                
+                return base64.b64encode(png_data).decode('utf-8')
         except Exception as e:
             self.logger.error(f"Error processing {file_path}: {str(e)}")
-            return None
+        return None
         
-    def raw_to_base64_bmp(self, file_path):
-        try:
-            with rawpy.imread(file_path) as raw:
-                rgb = raw.postprocess()
-                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            
-            #img = self.ensure_image_size(bgr)
-            
-            _, bmp_data = cv2.imencode('.bmp', bgr)
-            
-            return base64.b64encode(bmp_data).decode('utf-8')
-        except Exception as e:
-            self.logger.error(f"Error processing {file_path}: {str(e)}")
-            return None
-            
     def process_raw_image(self, file_path):
         with rawpy.imread(file_path) as raw:
+            
             try:
                 thumb = raw.extract_thumb()
                 if thumb.format == rawpy.ThumbFormat.JPEG:
                     return base64.b64encode(thumb.data).decode('utf-8')
+            
             except:
                 pass
             
             rgb = raw.postprocess()
             img = Image.fromarray(rgb)
-            
             buffer = io.BytesIO()
-            img.save(buffer, format="JPEG")
+            img.save(buffer, format="PNG")
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
-        
 
 class LLMProcessor:    
     def __init__(self, config):
         self.config = config
+        #self.callback = callback
         self.api_function_urls = {
             "tokencount": "/api/extra/tokencount",
             "interrogate": "/api/v1/generate",
@@ -249,7 +204,7 @@ class LLMProcessor:
         # this prompt works well, you can change it if you want, but comment it out in
         # case you want to use it again.
 
-        self.metadata_instruction = f"Generate a list of IPTC keywords for the image you see. Each keyword will be a one or two words and will describe each of the following as applicable and separately:\nobjects, people, animals, gender, race, physical appearance, clothing, style, subject, actions, subject, shot framing, professions, relationships, setting, location, concepts, colors, and anything else relevant.\n\nReturn formatted as a JSON object with key Keywords with a single list of keywords as the value.\n\n"
+        self.metadata_instruction = f"Generate a list of IPTC keywords for the image you see. Each keyword will be one or two words and will describe each of the following as applicable and separately:\nobjects, people, animals, gender, race, physical appearance, clothing, style, subject, actions, subject, shot framing, professions, relationships, setting, location, concepts, colors, and anything else relevant.\n\nReturn formatted as a JSON object with key Keywords with a single list of keywords as the value.\n\n"
         
         self.api_url = config.api_url
         self.headers = {
@@ -261,18 +216,18 @@ class LLMProcessor:
         # you may have to add an entry name for a finetune with
         # a different name than its base
         self.templates = {
-            1: {"name": "Alpaca", "user": "\n\n### Instruction:\n\n", "assistant": "\n\n### Response:\n\n", "system": ""},
+            1: {"name": ["Alpaca"], "user": "\n\n### Instruction:\n\n", "assistant": "\n\n### Response:\n\n", "system": ""},
             2: {"name": ["Vicuna", "Wizard", "ShareGPT"], "user": "### Human: ", "assistant": "\n### Assistant: ", "system": ""},
             3: {"name": ["Llama 2", "Llama2", "Llamav2"], "user": "[INST] ", "assistant": " [/INST]", "system": ""},
             4: {"name": ["Llama 3", "Llama3", "Llama-3"], "endTurn": "<|eot_id|>", "system": "", "user": "<|start_header_id|>user<|end_header_id|>\n\n", "assistant": "<|start_header_id|>assistant<|end_header_id|>\n\n"},
-            5: {"name": "Phi-3", "user": "<|end|><|user|>\n", "assistant": "<end_of_turn><|end|><|assistant|>\n", "system": ""},
+            5: {"name": ["Phi-3"], "user": "<|end|><|user|>\n", "assistant": "<end_of_turn><|end|><|assistant|>\n", "system": ""},
             6: {"name": ["Mistral", "bakllava"], "user": "\n[INST] ", "assistant": " [/INST]\n", "system": ""},
             7: {"name": ["Yi"], "user": "<|user|>", "assistant": "<|assistant|>", "system": ""},
-            8: {"name": ["ggml", "ChatML", "obsidian", "Nous", "Hermes", "llava-v1.6-34b", "cpm", "Qwen"], "user": "<|im_start|>user\n", "assistant": "<|im_end|>\n<|im_start|>assistant\n", "system": ""},
+            8: {"name": ["ChatML", "obsidian", "Nous", "Hermes", "cpm", "Qwen"], "user": "<|im_start|>user\n", "assistant": "<|im_end|>\n<|im_start|>assistant\n", "system": ""},
             9: {"name": ["WizardLM"], "user": "input:\n", "assistant": "output\n", "system": ""}
-        
         }
         self.model = self._get_model()
+        #self.callback = f"Current running model detected as: {self.model.get('name', 'unknown')}"
         self.max_context = self._get_max_context_length()
 
     def _call_api(self, api_function, payload=None):
@@ -308,7 +263,7 @@ class LLMProcessor:
         prompt = self.get_prompt(instruction=self.metadata_instruction)
         payload = {
             "prompt": prompt,
-            "max_length": 300 + (self.config.keywords_count * 10),
+            "max_length": 250,
             "images": [base64_image],
             "genkey": self.genkey,
             "model": "clip",
@@ -357,6 +312,8 @@ class LLMProcessor:
             start and end sequences. If the model name does not contain
             the name of the model it was based on, these may be incorrect.
         """
+        
+
         user_part = self.model["user"]
         assistant_part = self.model["assistant"]
         end_part = self.model.get("endTurn", "")
@@ -370,11 +327,9 @@ class LLMProcessor:
         """
         return f"KCPP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
     
-    #unused by the script but functional
     def _get_max_context_length(self):
         return self._call_api("max_context_length")
 
-    #unused by the script but functional
     def _get_token_count(self, content):
         payload = {"prompt": content, "genkey": self.genkey}
         return self._call_api("tokencount", payload)
@@ -386,9 +341,12 @@ class FileProcessor:
         self.llm_processor = LLMProcessor(config)
         self.check_paused_or_stopped = check_paused_or_stopped
         self.callback = callback
-        self.files_in_queue = 1
         self.db = TinyDB("filedata.json")
         self.nlp_model = None
+        self.start_time = time.time()
+        self.running_time = 0
+        self.files_in_queue = 0
+        self.files_done = -1
         if self.config.lemmatize:
             self.nlp_model = load_spacy()
             self.callback("Loaded spaCy for lemmatization")
@@ -396,19 +354,19 @@ class FileProcessor:
         # add more tags here if needed
         self.exiftool_fields = ["XMP:Description", "Subject", "Keywords", "XMP:Identifier", "FileType"]
         
-        # untested:
+        # untested formats:
         # arq, crm, cr3, crw, ciff, erf, fff, flif, gpr, hdp, wdp,
         # heif, hif, iiq, insp, jpf, jpm, jpx, jph, mef, mos, mpo,
         # nrw, ori, jng, mng, qtif, qti, qif, sr2, x3f
+        
         self.image_extensions = {
             "JPEG": [".jpg", ".jpeg", ".jpe", ".jif", ".jfif", ".jfi", ".jp2", ".j2k", ".jpf", ".jpx", ".jpm", ".mj2"],
             "PNG": [".png"],
             "GIF": [".gif"],
             "TIFF": [".tiff", ".tif"],
             "BMP": [".bmp", ".dib"],
-            #"WebP": [".webp"],
-            "SVG": [".svg", ".svgz"],
-            "ICO": [".ico"],
+            "WEBP": [".webp"],
+            "HEIF": [".heif", ".heic"],
             "RAW": [
                 ".raw",  # Generic RAW
                 ".arw",  # Sony
@@ -428,24 +386,18 @@ class FileProcessor:
                 ".rwl",  # Leica
             ],
         }
-            #"PSD": [".psd"],
-            #"HEIF": [".heif", ".heic"],
-            #"EPS": [".eps", ".epsf", ".epsi"],
-            #"AI": [".ai"],
-            #"PDF": [".pdf"],  # Not strictly an image format, but often used for images
-            #"XCF": [".xcf"],  # GIMP format
-            #"PPM": [".ppm", ".pgm", ".pbm", ".pnm"],  # Netpbm formats
-            #"WEBM": [".webm"],  # Video format that can contain still images
-            
+        
     def get_file_type(self, file_ext):
         
         if not file_ext.startswith('.'):
+            
             file_ext = '.' + file_ext
-        
         file_ext = file_ext.lower()
         
         for file_type, extensions in self.image_extensions.items():
+            
             if file_ext in [ext.lower() for ext in extensions]:
+                #print(file_type)
                 return file_type
         
         return None
@@ -464,7 +416,6 @@ class FileProcessor:
                     return metadata
             else:
                 metadata['XMP:Identifier'] = str(uuid.uuid4())
-                #print(f"Image UUID set to {metadata['XMP:Identifier']}")
                 return metadata
                 
         except Exception as e:
@@ -475,7 +426,7 @@ class FileProcessor:
         try:
             self.db.upsert(metadata, where('XMP:Identifier') == metadata.get('XMP:Identifier'))
             print(f"DB Updated with UUID: {metadata.get('XMP:Identifier')}")
-            return 
+            return
         except: 
             print(f"Error updating DB with UUID: {metadata.get('XMP:Identifier')}")
             return False
@@ -487,6 +438,7 @@ class FileProcessor:
             if self.check_paused_or_stopped():
                 return True
         return False
+    
             
     def list_files(self, directory):
         files = []
@@ -502,39 +454,54 @@ class FileProcessor:
         
     def process_directory(self, directory):
         files = self.list_files(directory)
-        self.running_time = 0
         metadata_list = []
         try:
             with exiftool.ExifToolHelper() as et:
-                #et.set_json_loads(ujson.loads)
                 metadata_list = et.get_tags(files, self.exiftool_fields)
         except Exception as e:
             print(f"Error loading Exiftool")
         
-        #print(f"Number of files to process: {len(metadata_list)}")
+        
+        #self.callback(f"Number of files to process: {len(metadata_list)}")
         
         for metadata in metadata_list:
+         
+            if self.files_in_queue > 0:
+                self.files_in_queue -= 1
             if self.check_pause_stop():
                 return
-            print(f"Processing file: {metadata.get('SourceFile', 'unknown')}")
-            #print(f"{repr(metadata)}")
-            self.process_file(metadata)
-    
+            #print(f"Processing file: {metadata.get('SourceFile', 'unknown')}")
+            if metadata:
+                self.process_file(metadata)
+            else:
+                pass
+
     def process_file(self, metadata):
-        self.files_in_queue -= 1
-        
         try:
             file_path = metadata['SourceFile']
+            
             metadata_added = self.check_uuid(metadata)
+            
             if metadata_added is None:
                 print(f"File {file_path} has already been processed or is a duplicate")
                 return
+                
             else:
                 metadata = metadata_added    
+                
                 image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
                 
                 if image_type is not None:
-                    self.start_time = time.time()
+                    
+                    self.files_done +=1 
+                    if self.files_done > 1:
+                        end_time = time.time()
+                        processing_time = end_time - self.start_time
+                        self.running_time += processing_time 
+                        average_time = self.running_time / self.files_done
+                        
+                        self.callback(f"Processing time: {processing_time:.2f}s. Avergage processing time: {average_time:.2f}s") 
+                        self.start_time = time.time()
                 
                     image_object_or_path = self.image_processor.route_image(file_path, image_type)
                     
@@ -566,68 +533,46 @@ class FileProcessor:
         if self.config.update_keywords:
             all_keywords.update(metadata.get("IPTC:Keywords", []))
             all_keywords.update(metadata.get("MWG:Keywords", []))
-            #all_keywords.update(metadata.get("Keywords", []))
+            all_keywords.update(metadata.get("Keywords", []))
             all_keywords.update(metadata.get("XMP:Subject", []))
         
         extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
+        if extracted_keywords is None:
+            extracted_keywords = self.extract_values(llm_metadata.get("keywords", []))
+        
         all_keywords.update(extracted_keywords)
         processed_keywords = set()
         
         for keyword in all_keywords:
             normalized = normalize_keyword(keyword)
-            if self.config.lemmatize:
-                normalized = lemmatize_keyword(normalized, self.nlp_model)
+            #if self.config.lemmatize:
+             #   normalized = lemmatize_keyword(normalized, self.nlp_model)
             processed_keywords.add(normalized)
 
         return list(processed_keywords)
     
-    def calculate_processing_times(self):
-        end_time = time.time()
-        processing_time = end_time - self.start_time
-
-        if not hasattr(self, 'number_completed'):
-            self.number_completed = 0
-        self.number_completed += 1
-
-        if not hasattr(self, 'total_processing_time'):
-            self.total_processing_time = 1
-        self.total_processing_time += processing_time
-
-        avg_processing_time = self.total_processing_time / self.number_completed
-        estimated_time_left = avg_processing_time * self.files_in_queue
-
-        processing_time_str = str(timedelta(seconds=int(processing_time)))
-        estimated_time_left_str = str(timedelta(seconds=int(estimated_time_left)))
-
-        return {
-            'processing_time': processing_time_str,
-            'estimated_time_left': estimated_time_left_str,
-            'files_remaining': self.files_in_queue
-        }
-
     def update_metadata(self, metadata, base64_image):
-        write_it = False
+
+        output = ""
+        file_path = metadata["SourceFile"]
+            
+            
         try:
-            file_path = metadata["SourceFile"]
-            
-            output = f"---\nImage: {os.path.basename(file_path)}" 
-            
-            #llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
-            llm_metadata = clean_json(largest_json(self.llm_processor.describe_content(base64_image)))
-            print(repr(llm_metadata))
+            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
             xmp_metadata = {}        
             xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
-            if llm_metadata["Keywords"]:
+            if llm_metadata["Keywords"] or llm_metadata["keywords"]:
                 xmp_metadata["IPTC:Keywords"] = ""
                 xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                output += "\nKeywords: " + ", ".join(xmp_metadata["MWG:Keywords"])
-                write_it = True
-            callback_output = output
-            #result = self.calculate_processing_times()
-            #callback_output = f"{output}\n---\nProcessed {file_path} in {result['processing_time']}. Estimated time left: {result['estimated_time_left']}. Files remaining: {result['files_remaining']}"  
+                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords",""))
+            output += f"\nFiles remaining in queue: {self.files_in_queue}"  
                 
-            if not self.config.dry_run and write_it:
+        except:
+            print(f"CANNOT parse keywords for {file_path}\n")
+     
+        try:    
+            if not self.config.dry_run and output:
                 if self.config.overwrite:
   
                     et.set_tags(
@@ -640,8 +585,10 @@ class FileProcessor:
                     with exiftool.ExifToolHelper() as et:
                         et.set_tags(file_path, tags=xmp_metadata)
                     self.update_db(xmp_metadata)
-                
-            self.callback(callback_output)
+                    
+                self.callback(output)
+            else:    
+                self.callback(f"File {file_path} was NOT written to because of an error or because dry_run is set.\n")
                     
         except Exception as e:
             print(f"Error updating metadata for {file_path}:  {str(e)}")
