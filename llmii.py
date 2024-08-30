@@ -46,7 +46,15 @@ def process_keywords(keywords):
         processed_keywords.add(lemmatized)
     return sorted(processed_keywords)
 """    
+def markdown_list_to_dict(text):
+    list_pattern = r'(?:^\s*[-*+]|\d+\.)\s*(.+)$'
+    list_items = re.findall(list_pattern, text, re.MULTILINE)
     
+    if list_items:
+        return {"Keywords": list_items}
+    else:
+        return None
+        
 def clean_string(data):
     if isinstance(data, dict):
         data = json.dumps(data)
@@ -61,11 +69,13 @@ def clean_string(data):
 
 def clean_json(data):
     if data is None:
-        return {"Keywords": []}
+        return None
     if isinstance(data, dict):
-        return data  # If it's already a dict, just return it
+        data = json.dumps(data)
     if isinstance(data, str):
-        # Try to extract JSON from the string
+        if result := markdown_list_to_dict(data):
+            return result
+        # Try to extract JSON markdown code
         pattern = r"```json\s*(.*?)\s*```"
         match = re.search(pattern, data, re.DOTALL)
         if match:
@@ -105,9 +115,11 @@ class Config:
         self.dry_run = False
         self.write_keywords = False
         self.update_keywords = False
-        self.reprocess = False
+        self.reprocess_failed = False
+        self.reprocess_all = False
         self.keywords_count = 7
         self.max_workers = 4
+        self.instruction = f"Analyze the image and generate at least 30 unique IPTC keywords. Cover the following categories as applicable:\n\n1. Main subject: Identify the primary focus of the image\n2. Living beings: If present, describe people's (and animal's where appropriate) appearance and clothing, infer gender, age, professions and relationships\n3. Actions or state: Describe any activities or the state of the main elements\n4. Setting: Describe the location, environment, or background\n5. Objects: List notable items, structures, or elements in the scene\n6. Visual qualities: Mention colors, textures, patterns, or lighting\n7. Atmosphere: Describe the mood, time of day, season, or weather\n8. Composition: Note the perspective, framing, or style of the photo\n\nProvide one or two words, avoiding repetition. Be specific and descriptive. Return ONLY a JSON object with the key 'Keywords' and an array of keyword strings as the value."
 
     @classmethod
     def from_args(cls):
@@ -119,11 +131,13 @@ class Config:
         parser.add_argument("--overwrite", action="store_true", help="Overwrite existing file metadata without making backup")
         parser.add_argument("--dry-run", action="store_true", help="Don't write any files")
         parser.add_argument("--write-keywords", action="store_true", help="Write Keywords metadata")
-        parser.add_argument("--reprocess", action="store_true", help="Reprocess files")
+        parser.add_argument("--reprocess-all", action="store_true", help="Reprocess all files")
+        parser.add_argument("--reprocess-failed", action="store_true", help="Reprocess failed files")
         parser.add_argument("--update-keywords", action="store_true", help="Update Keywords metadata")
         parser.add_argument("--keywords-count", type=int, default=7, help="Number of keywords to generate")
         parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of worker threads")
-        parser.add_argument("--lemmatize", action="store_true", help="Apply lemmatization to keywords")
+        #parser.add_argument("--lemmatize", action="store_true", help="Apply lemmatization to keywords")
+        #parser.add_argument("--instruction", default="What do you see in the image? Be specific and descriptive", help="Custom instruction for image description")
         args = parser.parse_args()
         
         config = cls()
@@ -141,7 +155,7 @@ class ImageProcessor:
         try:
             if image_type == 'RAW':
                 return self.process_raw_image(file_path)   
-            elif image_type in ['PNG', 'JPEG', 'BMP']:
+            elif image_type in ['JPEG', 'BMP', 'PNG']:
                 return self.encode_file_to_base64(file_path)
             else:
                 return self.process_image(file_path)
@@ -161,10 +175,10 @@ class ImageProcessor:
                     img = img.convert('RGB')
 
                 buffer = io.BytesIO()
-                img.save(buffer, format='PNG')
-                png_data = buffer.getvalue()
+                img.save(buffer, format='PNG', quality=95)
+                data = buffer.getvalue()
                 
-                return base64.b64encode(png_data).decode('utf-8')
+                return base64.b64encode(data).decode('utf-8')
         except Exception as e:
             self.logger.error(f"Error processing {file_path}: {str(e)}")
         return None
@@ -183,7 +197,7 @@ class ImageProcessor:
             rgb = raw.postprocess()
             img = Image.fromarray(rgb)
             buffer = io.BytesIO()
-            img.save(buffer, format="PNG")
+            img.save(buffer, format="JPEG", quality=95)
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
 
 class LLMProcessor:    
@@ -201,10 +215,7 @@ class LLMProcessor:
             "generate": "/api/v1/generate",
         }
         
-        # this prompt works well, you can change it if you want, but comment it out in
-        # case you want to use it again.
-
-        self.metadata_instruction = f"Generate a list of IPTC keywords for the image you see. Each keyword will be one or two words and will describe each of the following as applicable and separately:\nobjects, people, animals, gender, race, physical appearance, clothing, style, subject, actions, subject, shot framing, professions, relationships, setting, location, concepts, colors, and anything else relevant.\n\nReturn formatted as a JSON object with key Keywords with a single list of keywords as the value.\n\n"
+        self.instruction = config.instruction 
         
         self.api_url = config.api_url
         self.headers = {
@@ -260,7 +271,7 @@ class LLMProcessor:
             Max length gets expanded as keyword number increases
             to compensate for longer generation.
         """
-        prompt = self.get_prompt(instruction=self.metadata_instruction)
+        prompt = self.get_prompt(instruction=self.instruction)
         payload = {
             "prompt": prompt,
             "max_length": 250,
@@ -269,9 +280,9 @@ class LLMProcessor:
             "model": "clip",
             "top_p": 1,
             "top_k": 0,
-            "temp": 0.1,
+            "temp": 0,
             "rep_pen": 1,
-            "min_p": 0.05,
+            "min_p": 0,
         }
         return self._call_api("generate", payload)
 
@@ -341,15 +352,17 @@ class FileProcessor:
         self.llm_processor = LLMProcessor(config)
         self.check_paused_or_stopped = check_paused_or_stopped
         self.callback = callback
-        self.db = TinyDB("filedata.json")
+        if os.path.isdir(config.directory):
+            self.db = TinyDB(f"{os.path.join(config.directory, 'filedata.json')}")
+        else:
+            self.db = TinyDB("filedata.json")
         self.nlp_model = None
         self.start_time = time.time()
         self.running_time = 0
         self.files_in_queue = 0
         self.files_done = -1
-        if self.config.lemmatize:
-            self.nlp_model = load_spacy()
-            self.callback("Loaded spaCy for lemmatization")
+        self.total_processing_time = 0
+        self.files_processed = 0        
 
         self.exiftool_fields = ["XMP:Description", "Subject", "Keywords", "XMP:Identifier", "FileType"]
         
@@ -405,9 +418,12 @@ class FileProcessor:
         try:
             
             if metadata.get('XMP:Identifier'):
+                
                 if self.db.search(where('XMP:Identifier') == metadata.get('XMP:Identifier')):
-                    print(f"UUID found {metadata.get('XMP:Identifier')}")
-                    if self.config.reprocess:
+                    if self.config.reprocess_all:
+                        return metadata
+                    elif self.config.reprocess_failed and self.db.get((where('XMP:Identifier') == metadata.get('XMP:Identifier')) & (where('status').one_of(['retry', 'failed']))):
+                        print(f"Reprocessing {metadata.get('SourceFile')}")
                         return metadata
                     else:
                         return None
@@ -463,7 +479,7 @@ class FileProcessor:
         
         except Exception as e:
             self.callback(f"Directory has no images: {directory}")
-            print(f"Error loading Exiftool")
+            #print(f"Error loading Exiftool")
         
         
         #self.callback(f"Number of files to process: {len(metadata_list)}")
@@ -483,41 +499,40 @@ class FileProcessor:
     def process_file(self, metadata):
         try:
             file_path = metadata['SourceFile']
-            
-            metadata_added = self.check_uuid(metadata)
-            
-            if metadata_added is None:
-                #print(f"File {file_path} has already been processed or is a duplicate")
-                return
-                
-            else:
-                metadata = metadata_added    
-                
-                image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
-                
-                if image_type is not None:
-                    
-                    self.files_done +=1 
-                    if self.files_done > 1:
-                        end_time = time.time()
-                        processing_time = end_time - self.start_time
-                        self.running_time += processing_time 
-                        average_time = self.running_time / self.files_done
-                        
-                        self.callback(f"Processing time: {processing_time:.2f}s. Avergage processing time: {average_time:.2f}s") 
-                        self.start_time = time.time()
-                
-                    image_object_or_path = self.image_processor.route_image(file_path, image_type)
-                    
-                    if image_object_or_path:
-                        if not self.update_metadata(metadata, image_object_or_path):
-                            self.mark_for_retry(metadata)
-                        
-                    if self.check_pause_stop():
-                        return    
+
+            if not self.config.dry_run:
+                metadata_added = self.check_uuid(metadata)
+                if metadata_added is None:
+                    return
                 else:
-                    print(f"Not a supported image type: {file_path}")                    
-                
+                    metadata = metadata_added
+            
+            image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
+
+            if image_type is not None:
+                start_time = time.time()
+                image_object_or_path = self.image_processor.route_image(file_path, image_type)
+
+                if image_object_or_path:
+                    if self.update_metadata(metadata, image_object_or_path):
+                        end_time = time.time()
+                        processing_time = end_time - start_time
+                        self.total_processing_time += processing_time
+                        self.files_processed += 1
+                        average_time = self.total_processing_time / self.files_processed
+
+                        self.callback(f"File processed: {file_path}")
+                        self.callback(f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s")
+                        self.callback(f"Files processed: {self.files_processed}, Files remaining in queue: {self.files_in_queue}")
+                    else:
+                        if not self.config.dry_run:
+                            self.mark_for_retry(metadata)
+
+                if self.check_pause_stop():
+                    return    
+            else:
+                print(f"Not a supported image type: {file_path}")                    
+
         except Exception as e:
             print(f"Error processing: {file_path}")
                                 
@@ -565,48 +580,45 @@ class FileProcessor:
             print(f"Error getting metadata for {file_path}: {str(e)}")
             return None
             
-    
     def update_metadata(self, metadata, base64_image):
-        write = False
         file_path = metadata["SourceFile"]
-            
+
         try:
             llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
             if llm_metadata["Keywords"] or llm_metadata["keywords"]:
                 xmp_metadata = {}
-                xmp_metadata["XMP:Identifier"] = metadata["XMP:Identifier"]
+                xmp_metadata["XMP:Identifier"] = metadata.get("XMP:Identifier", str(uuid.uuid4()))
                 xmp_metadata["IPTC:Keywords"] = ""
                 xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(metadata, llm_metadata)
-                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords","")) + f"\nFiles remaining in queue: {self.files_in_queue}"  
+                output = f"---\nImage: {os.path.basename(file_path)}\nKeywords: " + ", ".join(xmp_metadata.get("MWG:Keywords",""))
+                xmp_metadata['status'] = 'success'
         except:
             print(f"CANNOT parse keywords for {file_path}\n")
             return False
-     
-        try:    
-            if self.config.dry_run:
-                self.callback(f"{output}\nNOT written to because an because pretend mode is set.\n")
-                return True 
-            elif self.config.overwrite:
-                with exiftool.ExifToolHelper() as et:
-                    et.set_tags(
-                        file_path,
-                        tags=xmp_metadata,
-                        params=["-P", "-overwrite_original"],
-                    )
+
+        if self.config.dry_run:
+            self.callback(f"{output}\nNOT written because dry run mode is set.\n")
+            return True 
+        else:
+            try:
+                if self.config.overwrite:
+                    with exiftool.ExifToolHelper() as et:
+                        et.set_tags(
+                            file_path,
+                            tags=xmp_metadata,
+                            params=["-P", "-overwrite_original"],
+                        )
+                else:
+                    with exiftool.ExifToolHelper() as et:
+                        et.set_tags(file_path, tags=xmp_metadata)
+                
                 self.update_db(xmp_metadata)
                 self.callback(output)
-                return True
-            else:
-                with exiftool.ExifToolHelper() as et:
-                    et.set_tags(file_path, tags=xmp_metadata)
-                self.update_db(xmp_metadata) 
-                self.callback(output)
                 return True  
-           
-        except Exception as e:
-            print(f"Error updating metadata for {file_path}:  {str(e)}")
-            return False
+            except Exception as e:
+                print(f"Error updating metadata for {file_path}: {str(e)}")
+                return False
 
     def process_retry_files(self):
         retry_files = self.db.search(where('status') == 'retry')
@@ -619,13 +631,13 @@ class FileProcessor:
             
         failed_files = self.db.search(where('status') == 'retry')
         if failed_files:
-            self.callback(f"Files that still failed after retry: {len(failed_files)}")
+            self.callback(f"Files that failed after retry: {len(failed_files)}")
             for metadata in failed_files:
                 metadata['status'] = 'failed'
                 self.update_db(metadata)
                 self.callback(f"Failed file: {metadata['SourceFile']}")
         else:
-            self.callback("All retry files processed successfully.")
+            self.callback("All retred files processed successfully.")
             
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
@@ -654,16 +666,18 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
             except Exception as e:
                 print(f"Error processing directory {directory}: {str(e)}")
 
-    # Final pass to retry failed files
-    file_processor.process_retry_files()
+    if not config.dry_run:
+        file_processor.process_retry_files()
 
-    failed_files = file_processor.db.search(where('status') == 'failed')
-    if failed_files:
-        callback(f"Files that failed after retry: {len(failed_files)}")
-        for metadata in failed_files:
-            callback(f"Failed file: {metadata['SourceFile']}")
+        failed_files = file_processor.db.search(where('status') == 'failed')
+        if failed_files:
+            callback(f"Files that failed after retry: {len(failed_files)}")
+            for metadata in failed_files:
+                callback(f"Failed file: {metadata['SourceFile']}")
+        else:
+            callback("All files processed successfully.")
     else:
-        callback("All files processed successfully.")
-
+        callback("Dry run completed. No changes were made to files or database.")
+        
 if __name__ == "__main__":
     main()

@@ -67,19 +67,28 @@ class ImageIndexerGUI(QMainWindow):
         api_layout.addWidget(QLabel("API Password:"))
         api_layout.addWidget(self.api_password_input)
         layout.addLayout(api_layout)
-
+        
+        # Instruction
+        instruction_layout = QHBoxLayout()
+        self.instruction_input = QLineEdit("Analyze the image and generate at least 30 unique IPTC keywords. Cover the following categories as applicable:\n\n1. Main subject: Identify the primary focus of the image\n2. Living beings: If present, describe people's (and animal's where appropriate) appearance and clothing, infer gender, age, professions and relationships\n3. Actions or state: Describe any activities or the state of the main elements\n4. Setting: Describe the location, environment, or background\n5. Objects: List notable items, structures, or elements in the scene\n6. Visual qualities: Mention colors, textures, patterns, or lighting\n7. Atmosphere: Describe the mood, time of day, season, or weather\n8. Composition: Note the perspective, framing, or style of the photo\n\nProvide one or two words, avoiding repetition. Be specific and descriptive. Return ONLY a JSON object with the key 'Keywords' and an array of keyword strings as the value.")
+        instruction_layout.addWidget(QLabel("Instruction:"))
+        instruction_layout.addWidget(self.instruction_input)
+        layout.addLayout(instruction_layout)
+        
         # Checkboxes for options
         options_group = QGroupBox("Options")
         options_layout = QVBoxLayout()
         self.no_crawl_checkbox = QCheckBox("Don't crawl subdirectories")
-        self.reprocess_checkbox = QCheckBox("Process files even if previously processed")
-        self.lemmatize_checkbox = QCheckBox("Lemmatize keywords (example: run, ran, running all become run)")
+        self.reprocess_failed_checkbox = QCheckBox("Reprocess failed files")
+        self.reprocess_all_checkbox = QCheckBox("Reprocess ALL files again")
+        #self.lemmatize_checkbox = QCheckBox("Lemmatize keywords (example: run, ran, running all become run)")
         self.overwrite_checkbox = QCheckBox("Don't make backups before writing")
-        self.dry_run_checkbox = QCheckBox("Pretend mode (see what happens without writing)")
+        self.dry_run_checkbox = QCheckBox("Pretend mode (do not write to files)")
         options_layout.addWidget(self.no_crawl_checkbox)
         options_layout.addWidget(self.overwrite_checkbox)
-        options_layout.addWidget(self.reprocess_checkbox)
-        options_layout.addWidget(self.lemmatize_checkbox)        
+        options_layout.addWidget(self.reprocess_failed_checkbox)
+        options_layout.addWidget(self.reprocess_all_checkbox)
+        #options_layout.addWidget(self.lemmatize_checkbox)        
         options_layout.addWidget(self.dry_run_checkbox)
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
@@ -105,16 +114,6 @@ class ImageIndexerGUI(QMainWindow):
         
         # Set default selection
         self.update_keywords_radio.setChecked(True)
-        
-        keywords_count_layout = QHBoxLayout()
-        self.keywords_count = QSpinBox()
-        self.keywords_count.setMinimum(1)
-        self.keywords_count.setMaximum(50)
-        self.keywords_count.setValue(7)
-        keywords_count_layout.addWidget(QLabel("Number of keywords to generate: "))
-        keywords_count_layout.addWidget(self.keywords_count)
-        
-        keywords_layout.addLayout(keywords_count_layout)
         
         xmp_layout.addLayout(keywords_layout)
         xmp_group.setLayout(xmp_layout)
@@ -154,18 +153,21 @@ class ImageIndexerGUI(QMainWindow):
         config.api_url = self.api_url_input.text()
         config.api_password = self.api_password_input.text()
         config.no_crawl = self.no_crawl_checkbox.isChecked()
-        config.reprocess = self.reprocess_checkbox.isChecked()
+        config.reprocess_failed = self.reprocess_failed_checkbox.isChecked()
+        config.reprocess_all = self.reprocess_all_checkbox.isChecked()
         config.overwrite = self.overwrite_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
-        config.lemmatize = self.lemmatize_checkbox.isChecked()
+        #config.lemmatize = self.lemmatize_checkbox.isChecked()
+        config.instruction = self.instruction_input.text()
         if self.write_keywords_radio.isChecked():
             config.write_keywords = True
             config.update_keywords = False
         elif self.update_keywords_radio.isChecked():
             config.write_keywords = False
             config.update_keywords = True
-
-        config.keywords_count = self.keywords_count.value()
+        
+        config.keywords_count = 7
+        #config.keywords_count = self.keywords_count.value()
      
         self.indexer_thread = IndexerThread(config)
         self.indexer_thread.output_received.connect(self.update_output)
