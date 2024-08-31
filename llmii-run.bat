@@ -67,21 +67,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Check if spaCy model is installed
-python -c "import spacy; spacy.load('en_core_web_sm')" 2>nul
-if errorlevel 1 (
-    echo spaCy English model not found. Downloading...
-    python -m spacy download en_core_web_sm
-    if errorlevel 1 (
-        echo Failed to download spaCy model. Please check your internet connection or install it manually.
-        pause
-        exit /b 1
-    )
-    echo spaCy English model has been installed.
-) else (
-    echo spaCy English model is already installed.
-)
-
 REM Launch your Python script
 start koboldcpp.exe --config llmii.kcppt
 python llmii-gui.py
