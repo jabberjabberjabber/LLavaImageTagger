@@ -46,18 +46,6 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Check if spaCy model is installed
-if ! python3 -c "import spacy; spacy.load('en_core_web_sm')" 2>/dev/null; then
-    echo "spaCy English model not found. Downloading..."
-    python3 -m spacy download en_core_web_sm
-    if [ $? -ne 0 ]; then
-        echo "Failed to download spaCy model. Please check your internet connection or install it manually."
-        exit 1
-    fi
-    echo "spaCy English model has been installed."
-else
-    echo "spaCy English model is already installed."
-fi
 
 # Determine the correct KoboldCPP binary based on the system
 if [[ "$(uname)" == "Darwin" ]]; then
