@@ -5,10 +5,19 @@ import io
 import random
 import rawpy
 import uuid
-from tinydb import TinyDB, where
+from tinydb import TinyDB, where, Query
 from json_repair import repair_json as rj
 from datetime import timedelta
 from fix_busted_json import first_json
+
+
+# TODO:
+# =====
+# Check file sizes before processing
+# Check for deleted files when reprocessing failures
+# Handle API rejections gracefully
+# Check for broken list item
+
 
 def normalize_keyword(keyword, banned_words):
     keyword = str(keyword).lower().strip()
@@ -25,10 +34,10 @@ def normalize_keyword(keyword, banned_words):
     return keyword
 
 def markdown_list_to_dict(text):
-    ''' Searches a string for a markdown formatted
+    """ Searches a string for a markdown formatted
         list, and if one is found, converts it to
         a dict.
-    '''
+    """
     list_pattern = r"(?:^\s*[-*+]|\d+\.)\s*(.+)$"
     list_items = re.findall(list_pattern, text, re.MULTILINE)
 
@@ -116,7 +125,7 @@ class Config:
         self.keywords_count = 7
         self.max_workers = 4
         self.system_instruction = "You are a helpful assistant"
-        self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
+        self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
 
     @classmethod
     def from_args(cls):
@@ -177,12 +186,12 @@ class ImageProcessor:
         register_heif_opener()
 
     def route_image(self, file_path, image_type):
-        ''' Checks RAW for embedded JPEG and uses that, 
+        """ Checks RAW for embedded JPEG and uses that, 
             if not converts it to PNG. JPG, PNG, BMP
             get sent as-is, all others get turned into
             PNGs. Everything is encoded in base64
             to get sent to the LLM
-        '''
+        """
         try:
             if image_type == "RAW":
                 return self.process_raw_image(file_path)
@@ -318,8 +327,8 @@ class LLMProcessor:
         self.max_context = self._get_max_context_length()
 
     def _call_api(self, api_function, payload=None):
-        """The part where we talk to koboldAPI. Open the browser
-        and go to http://localhost:5001/api to see all the options.
+        """ The part where we talk to koboldAPI. Open the browser
+            and go to http://localhost:5001/api to see all the options.
         """
         if api_function not in self.api_function_urls:
             raise ValueError(f"Invalid API function: {api_function}")
@@ -361,10 +370,10 @@ class LLMProcessor:
         return self._call_api("generate", payload)
 
     def _get_model(self):
-        """Calls koboldAPI and asks for the name of the running model.
-        Then tries to match a string in the returned text with
-        one of the prompt templates. It then loads the template
-        into the model dict.
+        """ Calls koboldAPI and asks for the name of the running model.
+            Then tries to match a string in the returned text with
+            one of the prompt templates. It then loads the template
+            into the model dict.
         """
         model_name = self._call_api("model")
         if not model_name:
@@ -404,9 +413,9 @@ class LLMProcessor:
         return matched_template if matched_template else self.templates[1]
 
     def get_prompt(self, instruction="", content=""):
-        """Uses the instruct templates to create a prompt with the proper
-        start and end sequences. If the model name does not contain
-        the name of the model it was based on, these may be incorrect.
+        """ Uses the instruct templates to create a prompt with the proper
+            start and end sequences. If the model name does not contain
+            the name of the model it was based on, these may be incorrect.
         """
                 
         user_part = self.model["user"]
@@ -419,8 +428,8 @@ class LLMProcessor:
         
     @staticmethod
     def _create_genkey():
-        """Prevents kobold from returning your generation to another
-        query.
+        """ Prevents kobold from returning your generation to another
+            query.
         """
         return f"KCPP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
 
@@ -462,6 +471,7 @@ class FileProcessor:
         # arq, crm, cr3, crw, ciff, erf, fff, flif, gpr, hdp, wdp,
         # heif, hif, iiq, insp, jpf, jpm, jpx, jph, mef, mos, mpo,
         # nrw, ori, jng, mng, qtif, qti, qif, sr2, x3f
+        
         self.image_extensions = {
             "JPEG": [
                 ".jpg",
@@ -516,52 +526,72 @@ class FileProcessor:
                 return file_type
         return None
 
-    def check_uuid(self, metadata):
+                
+    def check_uuid(self, metadata, file_path):
         try:
-            # If the metadata tag for Identifier is set, check if it
-            # is in the db, if not create one and set it
-            if metadata.get("XMP:Identifier"):
-                if self.db.search(
-                    where("XMP:Identifier") == metadata.get("XMP:Identifier")
-                ):
-                    # If reprocess all is enabled, do it
-                    if self.config.reprocess_all:
-                        return metadata
-                    # If reprocess all is not enable but reprocess failed is, 
-                    # check the db for this file's status
-                    elif self.config.reprocess_failed and self.db.get(
-                        (where("XMP:Identifier") == metadata.get("XMP:Identifier"))
-                        & (where("status").one_of(["retry", "failed"]))
-                    ):
-                        print(f"Reprocessing {metadata.get('SourceFile')}")
-                        return metadata
-                    else:
-                        return None
-                else:
+            identifier = metadata.get("XMP:Identifier")
+            source_file = self.db.get(where("SourceFile") == file_path)
+            existing_entry = self.db.get(where("XMP:Identifier") == identifier)
+
+            # Case 1: File has a UUID in metadata
+            if identifier:
+                if self.config.reprocess_all:
                     return metadata
+                if existing_entry:    
+                    if existing_entry.get("status") == "failed":
+                        if self.config.reprocess_failed:
+                            return metdata
+                    if existing_entry.get("status") == "retry":
+                        return metadata
+                    return None  # File with existing UUID
+                return metadata  
+
+            # Case 2: File has no UUID in metadata
             else:
-                metadata["XMP:Identifier"] = str(uuid.uuid4())
-                return metadata
+                # Check if there's a database entry for this file path
+                if source_file:
+                    # File has a database entry but no UUID in metadata
+                    if source_file.get("status") == "failed":
+                        if self.config.reprocess_failed:
+                            # Assign the UUID from the database to the metadata
+                            metadata["XMP:Identifier"] = source_file.get("XMP:Identifier")
+                            # Remove the file path and status from the database entry
+                            self.db.remove(Query().SourceFile == file_path)
+                            return metadata  # Process the file as if it were new
+                        else:
+                            return None  # Skip failed file if not retrying
+                    elif source_file.get("status") == "retry":
+                        return metadata
+                
+                # No database entry or UUID, treat as new file
+                if not isinstance(metadata, dict):
+                    self.callback(f"File metadata cannot be read or written to: {file_path}")
+                    return None
+                else:
+                    metadata["XMP:Identifier"] = str(uuid.uuid4())
+                    return metadata  # New file
 
         except Exception as e:
-            print(f"Error checking UUID")
+            print(f"Error checking UUID: {str(e)}")
             return None
-
+            
     def update_db(self, metadata):
-        try:
-            self.db.upsert(
-                metadata, where("XMP:Identifier") == metadata.get("XMP:Identifier")
-            )
-            print(f"DB Updated with UUID: {metadata.get('XMP:Identifier')}")
+        if self.config == "dry_run":
             return
-        except:
-            print(f"Error updating DB with UUID: {metadata.get('XMP:Identifier')}")
-            return False
-
-    def mark_for_retry(self, metadata):
-        metadata["status"] = "retry"
-        self.update_db(metadata)
-
+        try:
+            uuid = metadata.get("XMP:Identifier")
+            
+            db_entry = {
+                "XMP:Identifier": uuid,
+                "status": metadata.get("status", "success")
+            }
+            if metadata.get("status") in ["failed", "retry"]:
+                db_entry["SourceFile"] = metadata.get("SourceFile")
+            self.db.upsert(db_entry, where("XMP:Identifier") == uuid)
+            print(f"DB Updated with UUID: {uuid}")
+        except Exception as e:
+            print(f"Error updating DB with UUID: {uuid}: {str(e)}")
+                        
     def check_pause_stop(self):
         if self.check_paused_or_stopped():
             while self.check_paused_or_stopped():
@@ -606,16 +636,31 @@ class FileProcessor:
                 self.process_file(metadata)
             else:
                 pass
-
+            
     def process_file(self, metadata):
-        try:
+        """ This is a lot more complicated than it should be.
+            We only use UUID set in XMP:Identifier to ID files
+            so that the files being moved around or renamed 
+            will not affect their status. Thus we need to 
+            at least temporarily maintain a state for them
+            as they are being processed and if the process stops.
+        """
+        try:    
             # ExifTool always returns 'SourceFile' as the file full path
             # whether it is asked for or not
             file_path = metadata["SourceFile"]
+            
             # If None is returned, the file is in the database and will be skipped
+            if not os.path.isfile(file_path):
+                if metadata.get("XMP:Identifier"):
+                    self.db.remove(where("XMP:Identifier") == metadata.get("XMP:Identifier"))
+                    self.callback(f"Removed missing file from database: {file_path}")
+                return
+
             if not self.config.dry_run:
-                metadata_added = self.check_uuid(metadata)
+                metadata_added = self.check_uuid(metadata, file_path)
                 if metadata_added is None:
+                    
                     return
                 else:
                     metadata = metadata_added
@@ -624,12 +669,11 @@ class FileProcessor:
 
             if image_type is not None:
                 start_time = time.time()
-                image_object_or_path = self.image_processor.route_image(
-                    file_path, image_type
-                )
                 # Send image encoded in base64 to be processed by LLM
+                image_object_or_path = self.image_processor.route_image(file_path, image_type)
                 if image_object_or_path:
-                    if self.update_metadata(metadata, image_object_or_path):
+                    metadata = self.update_metadata(metadata, image_object_or_path)
+                    if metadata.get("status") == "success":    
                         end_time = time.time()
                         processing_time = end_time - start_time
                         self.total_processing_time += processing_time
@@ -643,9 +687,16 @@ class FileProcessor:
                         self.callback(
                             f"Files processed: {self.files_processed}, Files remaining in queue: {self.files_in_queue}"
                         )
-                    else:
+                        return True
+                    elif metadata.get("status") == "failed":
                         if not self.config.dry_run:
-                            self.mark_for_retry(metadata)
+                            self.update_db(metadata)
+                            return True
+                    elif metadata.get("status") == "retry":
+                        self.process_file(metadata)
+                    else:
+                        print(f"Error processing file: {file_path}")
+                        return
 
                 if self.check_pause_stop():
                     return
@@ -653,8 +704,11 @@ class FileProcessor:
                 print(f"Not a supported image type: {file_path}")
 
         except Exception as e:
-            print(f"Error processing: {file_path}")
-
+            print(f"Error processing: {file_path}: {str(e)}")
+            if not self.config.dry_run:
+                metadata["status"] = "failed"
+                self.update_db(metadata)
+                
     def extract_values(self, data):
         """ Goes through a dict and pulls all the 
             values out and returns them as a list
@@ -681,7 +735,6 @@ class FileProcessor:
             If update is configured, combine the old and new keywords.
         """
         all_keywords = set()
-
         if self.config.update_keywords:
             all_keywords.update(metadata.get("IPTC:Keywords", []))
             all_keywords.update(metadata.get("MWG:Keywords", []))
@@ -735,13 +788,21 @@ class FileProcessor:
                     + ", ".join(xmp_metadata.get("MWG:Keywords", ""))
                 )
                 xmp_metadata["status"] = "success"
+                metadata["status"] = "success"
         except:
-            print(f"CANNOT parse keywords for {file_path}\n")
-            return False
+            print(f"CANNOT parse keywords for {file_path}")
+            if metadata.get("status") == "retry" or metadata.get("status") == "failed":
+                metadata["status"] = "failed"
+                self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.\n---\n")
+            else:
+                metadata["status"] = "retry"
+                #self.callback(f"CANNOT parse keywords for {file_path}; it will be retried one time.")
+            return metadata
 
         if self.config.dry_run:
             self.callback(f"{output}\nNOT written because dry run mode is set.\n")
-            return True
+            metadata["status"] = "success"
+            return metadata
         else:
             try:
                 if self.config.overwrite:
@@ -754,33 +815,18 @@ class FileProcessor:
                 else:
                     with exiftool.ExifToolHelper() as et:
                         et.set_tags(file_path, tags=xmp_metadata)
-
                 self.update_db(xmp_metadata)
                 self.callback(output)
-                return True
+                return xmp_metadata
             except Exception as e:
                 print(f"Error updating metadata for {file_path}: {str(e)}")
-                return False
-
-    def process_retry_files(self):
-        retry_files = self.db.search(where("status") == "retry")
-        self.callback(f"Retrying {len(retry_files)} files...")
-
-        for metadata in retry_files:
-            if self.check_pause_stop():
-                return
-            self.process_file(metadata)
-
-        failed_files = self.db.search(where("status") == "retry")
-        if failed_files:
-            self.callback(f"Files that failed after retry: {len(failed_files)}")
-            for metadata in failed_files:
-                metadata["status"] = "failed"
-                self.update_db(metadata)
-                self.callback(f"Failed file: {metadata['SourceFile']}")
-        else:
-            self.callback("All retred files processed successfully.")
-
+                if metadata.get("status") == "retry" or metadata.get("status") == "failed":
+                    metadata["status"] = "failed"
+                    self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.\n---\n")
+                else:
+                    metadata["status"] = "retry"
+                    
+                return metadata
 
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
@@ -811,18 +857,7 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
             except Exception as e:
                 print(f"Error processing directory {directory}: {str(e)}")
 
-    if not config.dry_run:
-        file_processor.process_retry_files()
 
-        failed_files = file_processor.db.search(where("status") == "failed")
-        if failed_files:
-            callback(f"Files that failed after retry: {len(failed_files)}")
-            for metadata in failed_files:
-                callback(f"Failed file: {metadata['SourceFile']}")
-        else:
-            callback("All files processed successfully.")
-    else:
-        callback("Dry run completed. No changes were made to files or database.")
 
 
 if __name__ == "__main__":
