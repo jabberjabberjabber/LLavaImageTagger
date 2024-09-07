@@ -70,7 +70,8 @@ class ImageIndexerGUI(QMainWindow):
         
         # Instruction
         instruction_layout = QHBoxLayout()
-        self.instruction_input = QLineEdit("Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}")
+        
+        self.instruction_input = QLineEdit("Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}")
         instruction_layout.addWidget(QLabel("Instruction:"))
         instruction_layout.addWidget(self.instruction_input)
         layout.addLayout(instruction_layout)

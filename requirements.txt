@@ -7,3 +7,4 @@ rawpy
 tinydb
 json_repair
 pillow-heif
+uuid
