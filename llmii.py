@@ -523,6 +523,7 @@ class FileProcessor:
         """ Conditionals; very important or we end up with multiple
             DB entries or end up reprocessing files for no reason
         """ 
+        
         try:
             identifier = metadata.get("XMP:Identifier")
             source_file = self.db.get(where("SourceFile") == file_path)
@@ -545,13 +546,18 @@ class FileProcessor:
             else:
                 # Check if there's a database entry for this file path
                 if source_file:
+                    
                     # File has a database entry but no UUID in metadata
                     if source_file.get("status") == "failed":
                         if self.config.reprocess_failed:
+                            
                             # Assign the UUID from the database to the metadata
-                            metadata["XMP:Identifier"] = source_file.get("XMP:Identifier")
+                            
+                            #metadata["XMP:Identifier"] = source_file.get("XMP:Identifier")
+                            
                             # Remove the file path and status from the database entry
                             self.db.remove(Query().SourceFile == file_path)
+                            metadata["XMP:Identifier"] = str(uuid.uuid4())
                             return metadata  # Process the file as if it were new
                         else:
                             return None  # Skip failed file if not retrying
@@ -559,9 +565,6 @@ class FileProcessor:
                         return metadata
                 
                 # No database entry or UUID, treat as new file
-                if not isinstance(metadata, dict):
-                    self.callback(f"File metadata cannot be read or written to: {file_path}")
-                    return None
                 else:
                     metadata["XMP:Identifier"] = str(uuid.uuid4())
                     return metadata  # New file
