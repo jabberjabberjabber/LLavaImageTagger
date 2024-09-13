@@ -14,23 +14,41 @@ from fix_busted_json import first_json
 # TODO:
 # =====
 # Check file sizes before processing
-# Check for deleted files when reprocessing failures
+# Move top functions to a utilities file
 # Handle API rejections gracefully
 # Check for broken list item
 
 
 def normalize_keyword(keyword, banned_words):
+    """ Prevents bad keywords by banning regularly malformed 
+        sequences or words indicative or bad generations
+    """
     keyword = str(keyword).lower().strip()
+    
     # Replace underscores with spaces
     keyword = re.sub(r"[_]+", " ", keyword)
+    
     # Remove any other non-alphanumeric characters
     keyword = re.sub(r"[^\w\s-]", "", keyword)
+    
     # Replace multiple spaces with a single space
     keyword = re.sub(r"\s+", " ", keyword)
-    #if more than two words, take only the first two
-    keyword = ' '.join(keyword.split()[:2])
+    
+    words = keyword.split()
+    
+    # Cannot start with more than two digits
+    if re.match(r"^\d{3,}", words[0]):
+        return None
+    
+    # Two word max unless middle word is 'and'
+    if len(words) > 2 and words[1] != 'and':
+        keyword = ' '.join(words[:2])
+    else:
+        keyword = ' '.join(words[:3])
+    
     if re.match(r"^\d{5,}", keyword) or any(keyword.startswith(word) for word in banned_words):
         keyword = None
+    
     return keyword
 
 def markdown_list_to_dict(text):
@@ -46,22 +64,6 @@ def markdown_list_to_dict(text):
     else:
         return None
 
-def clean_string(data):
-    if isinstance(data, dict):
-        data = json.dumps(data)
-    if isinstance(data, str):
-        # Remove newlines
-        data = re.sub(r"\n", "", data)
-        # Remove funky quotes
-        data = re.sub(r'["""]', '"', data)
-        # I forget what this does
-        data = re.sub(r"\\{2}", "", data)
-        # Makes sure not to remove period at the end
-        last_period = data.rfind(".")
-        if last_period != -1:
-            data = data[: last_period + 1]
-    return data
-
 def clean_json(data):
     """ LLMs like to return all sorts of garbage.
         Even when asked to give a structured output
@@ -70,43 +72,47 @@ def clean_json(data):
         will pull basically anything useful and turn it
         into a dict
     """
-    
     if data is None:
         return None
     if isinstance(data, dict):
         return data
     if isinstance(data, str):
+        
         # Try to extract JSON markdown code
         pattern = r"```json\s*(.*?)\s*```"
         match = re.search(pattern, data, re.DOTALL)
         if match:
             data = match.group(1).strip()
         else:
+            
             # If no JSON block found, try to find anything that looks like JSON
             json_str = re.search(r"\{.*\}", data, re.DOTALL)
             if json_str:
                 data = json_str.group(0)
+                
         # Remove extra newlines and funky quotes 
         data = re.sub(r"\n", " ", data)
         data = re.sub(r'["""]', '"', data)
         try:
             return json.loads(rj(data))
-        except json.JSONDecodeError:
-            try:
-                return json.loads(first_json(rj(data)))
-                 # Is it a markdown list?
-                if result := markdown_list_to_dict(data):
-                    return result
-            except:
-                try:
-                    # The nuclear option - wrap whatever it is around brackets and load it
-                    result = json.loads(first_json(rj("{" + data + "}")))
-                    if result.get("Keywords"):
-                        return result
-                    #return json.loads(rj("{'Keywords': " + data + "}"))
-                except:
-                    print(f"Failed to parse JSON: {data}")
-                    return None
+                
+            # first_json will return the first json found in a string
+            # rj tries to repair json using some heuristics
+            return json.loads(first_json(rj(data)))
+            
+            # Is it a markdown list?
+            if result := markdown_list_to_dict(data):
+                return result
+            
+            # The nuclear option - wrap whatever it is around brackets and load it
+            # Hopefully normalize_keywords will take care of any garbage
+            result = json.loads(first_json(rj("{" + data + "}")))
+            if result.get("Keywords"):
+                return result
+            
+        except:
+            print(f"Failed to parse JSON: {data}")
+            
     return None
 
 
@@ -116,14 +122,12 @@ class Config:
         self.api_url = None
         self.api_password = None
         self.no_crawl = False
-        self.overwrite = False
+        self.no_backup = False
         self.dry_run = False
-        self.write_keywords = False
+        self.overwrite_keywords = False
         self.update_keywords = False
         self.reprocess_failed = False
         self.reprocess_all = False
-        self.keywords_count = 7
-        self.max_workers = 4
         self.system_instruction = "You are a helpful assistant"
         self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
 
@@ -141,15 +145,15 @@ class Config:
             "--no-crawl", action="store_true", help="Disable recursive indexing"
         )
         parser.add_argument(
-            "--overwrite",
+            "--no-backup",
             action="store_true",
-            help="Overwrite existing file metadata without making backup",
+            help="Don't make a backup of files before writing",
         )
         parser.add_argument(
             "--dry-run", action="store_true", help="Don't write any files"
         )
         parser.add_argument(
-            "--write-keywords", action="store_true", help="Write Keywords metadata"
+            "--overwrite-keywords", action="store_true", help="Overwrite existing keyword metadata"
         )
         parser.add_argument(
             "--reprocess-all", action="store_true", help="Reprocess all files"
@@ -158,19 +162,7 @@ class Config:
             "--reprocess-failed", action="store_true", help="Reprocess failed files"
         )
         parser.add_argument(
-            "--update-keywords", action="store_true", help="Update Keywords metadata"
-        )
-        parser.add_argument(
-            "--keywords-count",
-            type=int,
-            default=7,
-            help="Number of keywords to generate",
-        )
-        parser.add_argument(
-            "--max-workers",
-            type=int,
-            default=4,
-            help="Maximum number of worker threads",
+            "--update-keywords", action="store_true", help="Update existing keyword metadata"
         )
         args = parser.parse_args()
 
@@ -352,7 +344,8 @@ class LLMProcessor:
             return None
 
     def describe_content(self, base64_image):
-        """ Sampler settings are voodoo
+        """ Samplers should not be used but Kobold sets some by default 
+            if they aren't specified
         """
         prompt = self.get_prompt(instruction=self.instruction)
         payload = {
@@ -449,14 +442,14 @@ class FileProcessor:
         self.check_paused_or_stopped = check_paused_or_stopped
         self.callback = callback
         if os.path.isdir(config.directory):
-            self.db = TinyDB(f"{os.path.join(config.directory, 'filedata.json')}")
+            self.db = TinyDB(f"{os.path.join(config.directory, 'llmii.json')}")
         else:
-            self.db = TinyDB("filedata.json")
+            self.db = TinyDB("llmii.json")
         self.files_in_queue = 0
         self.total_processing_time = 0
         self.files_processed = 0
         # Words in the prompt tend to get repeated back by certain models
-        self.banned_words = ["main subject", "living beings", "actions or", "setting", "objects", "visual qualities", "atmosphere", "composition", "mood", "textures", "weather", "season", "time of", "structures", "elements", "location", "environment", "background", "activities", "elements", "appearance", "gender", "professions", "relationships", "identify"]
+        self.banned_words = ["main subject", "living beings", "actions", "setting", "objects", "visual qualities", "atmosphere", "composition", "mood", "textures", "weather", "season", "time of", "structures", "elements", "location", "environment", "background", "activities", "elements", "appearance", "gender", "professions", "relationships", "identify"]
         # These are the fields we check. ExifTool returns are kind of strange, not always
         # conforming to where they are or what they actually are named
         self.exiftool_fields = [
@@ -526,8 +519,10 @@ class FileProcessor:
                 return file_type
         return None
 
-                
     def check_uuid(self, metadata, file_path):
+        """ Conditionals; very important or we end up with multiple
+            DB entries or end up reprocessing files for no reason
+        """ 
         try:
             identifier = metadata.get("XMP:Identifier")
             source_file = self.db.get(where("SourceFile") == file_path)
@@ -585,6 +580,7 @@ class FileProcessor:
                 "XMP:Identifier": uuid,
                 "status": metadata.get("status", "success")
             }
+            # Successful processing should not have a sourcefile entry
             if metadata.get("status") in ["failed", "retry"]:
                 db_entry["SourceFile"] = metadata.get("SourceFile")
             self.db.upsert(db_entry, where("XMP:Identifier") == uuid)
@@ -625,7 +621,7 @@ class FileProcessor:
             self.callback(f"Directory has no images: {directory}")
 
         for metadata in metadata_list:
-            # Files deducted from queue here because it doesn't matter
+            # Files removed from queue here because it doesn't matter
             # if they are actually processed, just that they got sent
             # to processing
             if self.files_in_queue > 0:
@@ -680,7 +676,7 @@ class FileProcessor:
                         self.files_processed += 1
                         average_time = self.total_processing_time / self.files_processed
 
-                        self.callback(f"File processed: {file_path}")
+                        #self.callback(f"File processed: {file_path}")
                         self.callback(
                             f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
                         )
@@ -731,8 +727,9 @@ class FileProcessor:
             return []
 
     def process_keywords(self, metadata, llm_metadata):
-        """ Normalize keywords and deduplicate them.
+        """ Normalize extracted keywords and deduplicate them.
             If update is configured, combine the old and new keywords.
+            Only extracted keywords are normalized, the rest are added to the set as-is.
         """
         all_keywords = set()
         if self.config.update_keywords:
@@ -745,15 +742,17 @@ class FileProcessor:
         if extracted_keywords is None:
             extracted_keywords = self.extract_values(llm_metadata.get("keywords", []))
 
-        all_keywords.update(extracted_keywords)
         processed_keywords = set()
 
-        for keyword in all_keywords:
+        # Normalize only the extracted keywords
+        for keyword in extracted_keywords:
             normalized = normalize_keyword(keyword, self.banned_words)
             if normalized:
                 processed_keywords.add(normalized)
-            else:
-                pass
+
+        # Add the rest of the keywords without normalization
+        processed_keywords.update(all_keywords)
+
         if processed_keywords:        
             return list(processed_keywords)
         else:
@@ -793,7 +792,7 @@ class FileProcessor:
             print(f"CANNOT parse keywords for {file_path}")
             if metadata.get("status") == "retry" or metadata.get("status") == "failed":
                 metadata["status"] = "failed"
-                self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.\n---\n")
+                self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.")
             else:
                 metadata["status"] = "retry"
                 #self.callback(f"CANNOT parse keywords for {file_path}; it will be retried one time.")
@@ -805,7 +804,7 @@ class FileProcessor:
             return metadata
         else:
             try:
-                if self.config.overwrite:
+                if self.config.no_backup:
                     with exiftool.ExifToolHelper() as et:
                         et.set_tags(
                             file_path,
@@ -822,7 +821,7 @@ class FileProcessor:
                 print(f"Error updating metadata for {file_path}: {str(e)}")
                 if metadata.get("status") == "retry" or metadata.get("status") == "failed":
                     metadata["status"] = "failed"
-                    self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.\n---\n")
+                    self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.")
                 else:
                     metadata["status"] = "retry"
                     

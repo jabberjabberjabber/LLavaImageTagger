@@ -166,8 +166,8 @@ LLMImageIndexer processes images using a combination of local file system operat
    - If the "dry run" option is set, no actual changes are made to the files and the database will not used.
 
 9. **Error Handling and Retries**:
-   - If a file fails processing, it's marked for retry in the database.
-   - After the initial pass, the tool attempts to reprocess all failed files.
+   - If a file fails processing, it is retried once. 
+   - When processing fails it is usually because the model does not give back data that can be parsed as keywords, and a second shot will get a valid generation.
    - If a file fails again, it's marked as "failed" in the database, and the failure is reported in the GUI.
    - Failed files can be processed again along with any unprocessed files by checking the appropriate box.
 
@@ -178,6 +178,7 @@ LLMImageIndexer processes images using a combination of local file system operat
       - Any errors or warnings encountered.
 
 11. **Options processing**:
+	- You may add a custom instruction in the appropriate field. Results will be highly variable and using the default prompt is suggested.
 	- If "Don't crawl subdirectories" is checked, only images in the base directory specified will be processed.
 	- If "Don't make backups before writing" is checked, ExifTool will not make a backup of the original file named filename.ext_original before modifying.
 	- If "Reprocess faild files" is checked, any files that have been marked as "retry" or "failed" along with any unprocessed files will be processed.
@@ -191,7 +192,9 @@ LLMImageIndexer processes images using a combination of local file system operat
 
 ## Troubleshooting
 
+- [See this guide](https://old.reddit.com/r/LocalLLaMA/comments/1f7cdhj/koboldcpp_and_vision_models_a_guide/) for help choosing models and projectors.
 - If you encounter issues with ExifTool, ensure it's properly installed and accessible in your system PATH.
+- In order to speed start-time, the queue counter only counts the files in the current directory being crawled. If you have many subdirectories and want to know how many files are left to proccess, find the number of image files in all of the directories and subract them from the files processed. 
 - Make sure KoboldCPP is running and the API URL in the GUI matches the KoboldCPP endpoint.
 - Check the output area in the GUI for error messages and warnings.
 - If the output window says it finished but it didn't do anything, make sure the folder you pointed it to exists.
@@ -214,7 +217,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [ExifTool](https://exiftool.org/) for metadata manipulation
 - [KoboldCPP](https://github.com/LostRuins/koboldcpp) for local AI processing
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) for the GUI framework
-- [Fix Busted JSON](https://github.com/Qarj/fix-busted-json) for help with mangled JSON parsing
+- [Fix Busted JSON](https://github.com/Qarj/fix-busted-json) and [Repair-Json]( for help with mangled JSON parsing
 ## Disclaimer
 
 This tool is designed for personal use and should be used responsibly. Always ensure you have the right to modify and tag the images you process.

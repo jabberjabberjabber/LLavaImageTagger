@@ -83,10 +83,10 @@ class ImageIndexerGUI(QMainWindow):
         self.reprocess_failed_checkbox = QCheckBox("Reprocess failed files")
         self.reprocess_all_checkbox = QCheckBox("Reprocess ALL files again")
         #self.lemmatize_checkbox = QCheckBox("Lemmatize keywords (example: run, ran, running all become run)")
-        self.overwrite_checkbox = QCheckBox("Don't make backups before writing")
+        self.no_backup_checkbox = QCheckBox("Don't make backups before writing")
         self.dry_run_checkbox = QCheckBox("Pretend mode (do not write to files)")
         options_layout.addWidget(self.no_crawl_checkbox)
-        options_layout.addWidget(self.overwrite_checkbox)
+        options_layout.addWidget(self.no_backup_checkbox)
         options_layout.addWidget(self.reprocess_failed_checkbox)
         options_layout.addWidget(self.reprocess_all_checkbox)
         #options_layout.addWidget(self.lemmatize_checkbox)        
@@ -102,15 +102,15 @@ class ImageIndexerGUI(QMainWindow):
         self.keywords_radio_group = QButtonGroup(self)
         
         #self.no_keywords_radio = QRadioButton("Don't modify keywords")
-        self.write_keywords_radio = QRadioButton("Clear existing keywords and write new ones")
+        self.overwrite_keywords_radio = QRadioButton("Clear existing keywords and write new ones")
         self.update_keywords_radio = QRadioButton("Add to existing keywords")
         
         #self.keywords_radio_group.addButton(self.no_keywords_radio)
-        self.keywords_radio_group.addButton(self.write_keywords_radio)
+        self.keywords_radio_group.addButton(self.overwrite_keywords_radio)
         self.keywords_radio_group.addButton(self.update_keywords_radio)
         
         #keywords_layout.addWidget(self.no_keywords_radio)
-        keywords_layout.addWidget(self.write_keywords_radio)
+        keywords_layout.addWidget(self.overwrite_keywords_radio)
         keywords_layout.addWidget(self.update_keywords_radio)
         
         # Set default selection
@@ -156,15 +156,15 @@ class ImageIndexerGUI(QMainWindow):
         config.no_crawl = self.no_crawl_checkbox.isChecked()
         config.reprocess_failed = self.reprocess_failed_checkbox.isChecked()
         config.reprocess_all = self.reprocess_all_checkbox.isChecked()
-        config.overwrite = self.overwrite_checkbox.isChecked()
+        config.no_backup = self.no_backup_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
         #config.lemmatize = self.lemmatize_checkbox.isChecked()
         config.instruction = self.instruction_input.text()
-        if self.write_keywords_radio.isChecked():
-            config.write_keywords = True
+        if self.overwrite_keywords_radio.isChecked():
+            config.overwrite_keywords = True
             config.update_keywords = False
         elif self.update_keywords_radio.isChecked():
-            config.write_keywords = False
+            config.overwrite_keywords = False
             config.update_keywords = True
         
         config.keywords_count = 7
