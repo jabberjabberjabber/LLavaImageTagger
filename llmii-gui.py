@@ -69,9 +69,15 @@ class ImageIndexerGUI(QMainWindow):
         layout.addLayout(api_layout)
         
         # Instruction
+        
         instruction_layout = QHBoxLayout()
+        self.caption_instruction_input = QLineEdit("Do ONE of these:\\n1. If the image contains mostly text or code, write what it says verbatim.\\n2.If the image does not mostly contain text, describe the image in detail.")
+        
         
         self.instruction_input = QLineEdit("Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}")
+        instruction_layout.addWidget(QLabel("Caption Instruction:"))
+        instruction_layout.addWidget(self.caption_instruction_input)
+        
         instruction_layout.addWidget(QLabel("Instruction:"))
         instruction_layout.addWidget(self.instruction_input)
         layout.addLayout(instruction_layout)
@@ -101,15 +107,15 @@ class ImageIndexerGUI(QMainWindow):
         keywords_layout = QVBoxLayout()
         self.keywords_radio_group = QButtonGroup(self)
         
-        #self.no_keywords_radio = QRadioButton("Don't modify keywords")
+        self.write_caption_radio = QRadioButton("Write image description to text file")
         self.overwrite_keywords_radio = QRadioButton("Clear existing keywords and write new ones")
         self.update_keywords_radio = QRadioButton("Add to existing keywords")
         
-        #self.keywords_radio_group.addButton(self.no_keywords_radio)
+        self.keywords_radio_group.addButton(self.write_caption_radio)
         self.keywords_radio_group.addButton(self.overwrite_keywords_radio)
         self.keywords_radio_group.addButton(self.update_keywords_radio)
         
-        #keywords_layout.addWidget(self.no_keywords_radio)
+        keywords_layout.addWidget(self.write_caption_radio)
         keywords_layout.addWidget(self.overwrite_keywords_radio)
         keywords_layout.addWidget(self.update_keywords_radio)
         
@@ -160,13 +166,19 @@ class ImageIndexerGUI(QMainWindow):
         config.dry_run = self.dry_run_checkbox.isChecked()
         #config.lemmatize = self.lemmatize_checkbox.isChecked()
         config.instruction = self.instruction_input.text()
+        config.caption_instruction = self.caption_instruction_input.text()
         if self.overwrite_keywords_radio.isChecked():
             config.overwrite_keywords = True
             config.update_keywords = False
+            config.write_caption = False
         elif self.update_keywords_radio.isChecked():
             config.overwrite_keywords = False
             config.update_keywords = True
-        
+            config.write_caption = False
+        elif self.write_caption_radio.isChecked():
+            config.overwrite_keywords = False
+            config.update_keywords = False
+            config.write_caption = True
         config.keywords_count = 7
         #config.keywords_count = self.keywords_count.value()
      

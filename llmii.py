@@ -63,7 +63,19 @@ def markdown_list_to_dict(text):
         return {"Keywords": list_items}
     else:
         return None
-
+        
+def clean_string(data):
+    if isinstance(data, dict):
+        data = json.dumps(data)
+    if isinstance(data, str):
+        data = re.sub(r"\n", "", data)
+        data = re.sub(r'["""]', '"', data)
+        data = re.sub(r"\\{2}", "", data)
+        last_period = data.rfind('.')
+        if last_period != -1:
+            data = data[:last_period+1]
+    return data
+    
 def clean_json(data):
     """ LLMs like to return all sorts of garbage.
         Even when asked to give a structured output
@@ -107,7 +119,7 @@ def clean_json(data):
             # The nuclear option - wrap whatever it is around brackets and load it
             # Hopefully normalize_keywords will take care of any garbage
             result = json.loads(first_json(rj("{" + data + "}")))
-            if result.get("Keywords"):
+            if result.get("Keywords") or result.get("Description"):
                 return result
             
         except:
@@ -128,6 +140,8 @@ class Config:
         self.update_keywords = False
         self.reprocess_failed = False
         self.reprocess_all = False
+        self.write_caption = False
+        self.caption_instruction = "Do ONE of these:\\n1. If the image contains mostly text or code, write what it says verbatim.\\n2.If the image does not mostly contain text, describe the image in detail."
         self.system_instruction = "You are a helpful assistant"
         self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
 
@@ -164,6 +178,7 @@ class Config:
         parser.add_argument(
             "--update-keywords", action="store_true", help="Update existing keyword metadata"
         )
+        parser.add_argument("--write-description", action="store_true", help="Write description in separate file")
         args = parser.parse_args()
 
         config = cls()
@@ -248,7 +263,7 @@ class LLMProcessor:
         }
 
         self.instruction = config.instruction
-
+        self.caption_instruction = config.caption_instruction
         self.api_url = config.api_url
         self.headers = {
             "Content-Type": "application/json",
@@ -343,14 +358,24 @@ class LLMProcessor:
             print(f"Error calling API: {str(e)}")
             return None
 
-    def describe_content(self, base64_image):
+    def describe_content(self, base64_image, task="keywords"):
         """ Samplers should not be used but Kobold sets some by default 
             if they aren't specified
         """
-        prompt = self.get_prompt(instruction=self.instruction)
+        if task == "keywords":
+            instruction = self.instruction
+            max_length = 250
+        elif task == "caption":
+            instruction = self.caption_instruction
+            max_length = 2048
+        else:
+            print(f"Invalid task {task}")
+            return None
+            
+        prompt = self.get_prompt(instruction)
         payload = {
             "prompt": prompt,
-            "max_length": 250,
+            "max_length": max_length,
             "images": [base64_image],
             "genkey": self.genkey,
             "model": "clip",
@@ -671,7 +696,18 @@ class FileProcessor:
                 # Send image encoded in base64 to be processed by LLM
                 image_object_or_path = self.image_processor.route_image(file_path, image_type)
                 if image_object_or_path:
-                    metadata = self.update_metadata(metadata, image_object_or_path)
+                    
+                    if self.config.write_caption:
+                        #if os.path.exists(f"{file_path}.txt"):
+                        #    print(f"File description already exists: {file_path}\nSkipping...")
+                            
+                        #else:
+                        self.write_caption(metadata, image_object_or_path)
+                        metadata["status"] = "success"
+                        
+                    if not self.config.write_caption:
+                        metadata = self.update_metadata(metadata, image_object_or_path)
+                        
                     if metadata.get("status") == "success":    
                         end_time = time.time()
                         processing_time = end_time - start_time
@@ -769,12 +805,41 @@ class FileProcessor:
         except Exception as e:
             print(f"Error getting metadata for {file_path}: {str(e)}")
             return None
-
+            
+    def write_caption(self, metadata, base64_image):
+        file_path = metadata["SourceFile"]
+        side_text_path = file_path + ".txt"
+        task = "caption"
+        
+        try:
+            caption = self.llm_processor.describe_content(base64_image, task)
+            
+            if caption:
+                
+                self.callback(f"Description saved in file {side_text_path}")
+                with open(side_text_path, 'w', encoding='utf-8') as file:
+                    file.write(caption)
+                metadata["status"] = "success"
+            else:
+                error_message = f"Get description failed for {file_path}: No valid description returned"
+                self.callback(error_message)
+                metadata["status"] = "failed"
+        except Exception as e:
+            error_message = f"Error processing {file_path}: {str(e)}"
+            print(error_message)
+            self.callback(error_message)
+            metadata["status"] = "failed"
+        
+        if not self.config.dry_run:
+            self.update_db(metadata)
+        
+        return metadata
+                    
     def update_metadata(self, metadata, base64_image):
         file_path = metadata["SourceFile"]
-
+        task = "keywords"
         try:
-            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image, task))
             if llm_metadata["Keywords"] or llm_metadata["keywords"]:
                 xmp_metadata = {}
                 xmp_metadata["XMP:Identifier"] = metadata.get(
