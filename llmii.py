@@ -536,7 +536,7 @@ class FileProcessor:
                 if existing_entry:    
                     if existing_entry.get("status") == "failed":
                         if self.config.reprocess_failed:
-                            return metdata
+                            return metadata
                     if existing_entry.get("status") == "retry":
                         return metadata
                     return None  # File with existing UUID
