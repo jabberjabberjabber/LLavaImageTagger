@@ -132,4 +132,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [ExifTool](https://exiftool.org/) for metadata manipulation
 - [KoboldCPP](https://github.com/LostRuins/koboldcpp) for local AI processing
 - [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) for the GUI framework
-- [Fix Busted JSON](https://github.com/Qarj/fix-busted-json) and [Repair-Json]( for help with mangled JSON parsing
+- [Fix Busted JSON](https://github.com/Qarj/fix-busted-json) and [Json Repair](https://github.com/josdejong/jsonrepair) for help with mangled JSON parsing
