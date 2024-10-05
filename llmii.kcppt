@@ -5,7 +5,7 @@
     "config": null,
     "contextsize": 4096,
     "debugmode": 0,
-    "flashattention": true,
+    "flashattention": false,
     "forceversion": 0,
     "foreground": false,
     "gpulayers": -1,
