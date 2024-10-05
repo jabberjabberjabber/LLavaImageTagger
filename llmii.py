@@ -19,7 +19,7 @@ from fix_busted_json import first_json
 # Check for broken list item
 
 
-def normalize_keyword(keyword, banned_words):
+def normalize_keyword(keyword, banned_words, replaced_words):
     """ Prevents bad keywords by banning regularly malformed 
         sequences or words indicative or bad generations
     """
@@ -34,14 +34,24 @@ def normalize_keyword(keyword, banned_words):
     # Replace multiple spaces with a single space
     keyword = re.sub(r"\s+", " ", keyword)
     
+    if keyword.startswith(""):
+        return keyword
+        
+    # Swap slop
+    for subst_word, common_words in replaced_words.items():
+        if keyword in [commond_word.lower() for commond_word in common_words]:
+            keyword = subst_word
+            break
+    
     words = keyword.split()
     
     # Cannot start with more than two digits
     if re.match(r"^\d{3,}", words[0]):
         return None
     
+    
     # Two word max unless middle word is 'and'
-    if len(words) > 2 and words[1] != 'and':
+    if len(words) > 2 and [words[1] != 'and' and words[1] != 'or']:
         keyword = ' '.join(words[:2])
     else:
         keyword = ' '.join(words[:3])
@@ -63,7 +73,49 @@ def markdown_list_to_dict(text):
         return {"Keywords": list_items}
     else:
         return None
+        
+def find_keywords(data):
+    if isinstance(data, list):
+        data = ' '.join(data)
+    if not isinstance(data, str):
+        return data
+        
+    # Define the regex pattern to find 'keyword:' or 'keywords:' case-insensitively
+    pattern = re.compile(r'(?i)(keyword|keywords):', re.IGNORECASE)
 
+    # Find the match
+    match = pattern.search(data)
+    if not match:
+        return {}
+
+    # Extract the portion of the string after the matched keyword
+    remaining_string = data[match.end():].strip()
+
+    # Initialize the list to hold the keywords
+    keywords = []
+
+    # Check for different formats of the list
+    if '[' in remaining_string and ']' in remaining_string:
+        # JSON-like list format
+        try:
+            # Extract the list part and evaluate it
+            list_part = remaining_string[remaining_string.index('['):remaining_string.index(']')+1]
+            keywords = eval(list_part)
+        except:
+            pass
+    elif remaining_string.startswith('-'):
+        # Bullet-point list format
+        lines = remaining_string.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('-'):
+                keywords.append(line[1:].strip())
+    else:
+        # Comma-separated list format
+        keywords = [word.strip() for word in remaining_string.split(',') if word.strip()]
+
+    return {"Keywords": keywords}
+    
 def clean_json(data):
     """ LLMs like to return all sorts of garbage.
         Even when asked to give a structured output
@@ -77,7 +129,7 @@ def clean_json(data):
     if isinstance(data, dict):
         return data
     if isinstance(data, str):
-        
+        copied_data = data[:]
         # Try to extract JSON markdown code
         pattern = r"```json\s*(.*?)\s*```"
         match = re.search(pattern, data, re.DOTALL)
@@ -110,6 +162,8 @@ def clean_json(data):
             if result.get("Keywords"):
                 return result
             
+            return find_keywords(copied_data)
+            
         except:
             print(f"Failed to parse JSON: {data}")
             
@@ -128,7 +182,10 @@ class Config:
         self.update_keywords = False
         self.reprocess_failed = False
         self.reprocess_all = False
-        self.system_instruction = "You are a helpful assistant"
+        self.skip_orphans = True
+        self.text_completion = False
+        self.gen_count = 150
+        self.system_instruction = "You are a helpful assistant."
         self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
 
     @classmethod
@@ -162,7 +219,16 @@ class Config:
             "--reprocess-failed", action="store_true", help="Reprocess failed files"
         )
         parser.add_argument(
+            "--skip-orphans", action="store_true", help="If a file has a UUID and keywords but is not in the database, skip processing it"
+        )
+        parser.add_argument(
             "--update-keywords", action="store_true", help="Update existing keyword metadata"
+        )
+        parser.add_argument(
+            "--text-completion", action="store_true", help="Ignore instruct templates"
+        )
+        parser.add_argument(
+            "--gen-count", default=150, help="Number of tokens to generate"
         )
         args = parser.parse_args()
 
@@ -179,9 +245,9 @@ class ImageProcessor:
 
     def route_image(self, file_path, image_type):
         """ Checks RAW for embedded JPEG and uses that, 
-            if not converts it to PNG. JPG, PNG, BMP
+            if not converts it to JPG. JPG, PNG
             get sent as-is, all others get turned into
-            PNGs. Everything is encoded in base64
+            JPGs. Everything is encoded in base64
             to get sent to the LLM
         """
         try:
@@ -281,6 +347,7 @@ class LLMProcessor:
                 "name": ["Llama 3", "Llama3", "Llama-3"],
                 "endTurn": "<|eot_id|>\n",
                 "system": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n",
+                "system": None,
                 "user": "<|start_header_id|>user<|end_header_id|>\n\n",
                 "assistant": "<|start_header_id|>assistant<|end_header_id|>\n\n",
             },
@@ -303,7 +370,7 @@ class LLMProcessor:
                 "system": None,
             },
             8: {
-                "name": ["ChatML", "obsidian", "Nous", "Hermes", "cpm", "Qwen"],
+                "name": ["ChatML", "obsidian", "Nous", "Hermes", "cpm", "Qwen", "Josie"],
                 "user": "<|im_end|>\n<|im_start|>user\n",
                 "assistant": "<|im_end|>\n<|im_start|>assistant\n",
                 "system": "<|im_start|>system\n",
@@ -350,10 +417,10 @@ class LLMProcessor:
         prompt = self.get_prompt(instruction=self.instruction)
         payload = {
             "prompt": prompt,
-            "max_length": 250,
+            "max_length": self.config.gen_count,
             "images": [base64_image],
             "genkey": self.genkey,
-            "model": "clip",
+            #"model": "clip",
             "top_p": 1,
             "top_k": 0,
             "temp": 0,
@@ -368,6 +435,12 @@ class LLMProcessor:
             one of the prompt templates. It then loads the template
             into the model dict.
         """
+        if self.config.text_completion:
+            return { "name": ["Completion"],
+                "user": "",
+                "assistant": "",
+                "system": None,
+            }
         model_name = self._call_api("model")
         if not model_name:
             return None
@@ -450,12 +523,15 @@ class FileProcessor:
         self.files_processed = 0
         # Words in the prompt tend to get repeated back by certain models
         self.banned_words = ["main subject", "living beings", "actions", "setting", "objects", "visual qualities", "atmosphere", "composition", "mood", "textures", "weather", "season", "time of", "structures", "elements", "location", "environment", "background", "activities", "elements", "appearance", "gender", "professions", "relationships", "identify"]
+        
+        self.replaced_words = {}
+            
         # These are the fields we check. ExifTool returns are kind of strange, not always
         # conforming to where they are or what they actually are named
         self.exiftool_fields = [
-            "XMP:Description",
-            "Subject",
-            "Keywords",
+            #"XMP:Description",
+            #"XMP:Subject",
+            "MWG:Keywords",
             "XMP:Identifier",
             "FileType",
         ]
@@ -483,7 +559,7 @@ class FileProcessor:
             "PNG": [".png"],
             "GIF": [".gif"],
             "TIFF": [".tiff", ".tif"],
-            "BMP": [".bmp", ".dib"],
+            #"BMP": [".bmp", ".dib"],
             "WEBP": [".webp"],
             "HEIF": [".heif", ".heic"],
             "RAW": [
@@ -528,7 +604,7 @@ class FileProcessor:
             identifier = metadata.get("XMP:Identifier")
             source_file = self.db.get(where("SourceFile") == file_path)
             existing_entry = self.db.get(where("XMP:Identifier") == identifier)
-
+            
             # Case 1: File has a UUID in metadata
             if identifier:
                 if self.config.reprocess_all:
@@ -539,7 +615,10 @@ class FileProcessor:
                             return metadata
                     if existing_entry.get("status") == "retry":
                         return metadata
-                    return None  # File with existing UUID
+                    return None 
+                # Orphan -- has UUID and Keywords but not in db
+                if self.config.skip_orphans and metadata.get("Keywords"):
+                    return None
                 return metadata  
 
             # Case 2: File has no UUID in metadata
@@ -550,11 +629,7 @@ class FileProcessor:
                     # File has a database entry but no UUID in metadata
                     if source_file.get("status") == "failed":
                         if self.config.reprocess_failed:
-                            
-                            # Assign the UUID from the database to the metadata
-                            
-                            #metadata["XMP:Identifier"] = source_file.get("XMP:Identifier")
-                            
+
                             # Remove the file path and status from the database entry
                             self.db.remove(Query().SourceFile == file_path)
                             metadata["XMP:Identifier"] = str(uuid.uuid4())
@@ -649,7 +724,7 @@ class FileProcessor:
             # whether it is asked for or not
             file_path = metadata["SourceFile"]
             
-            # If None is returned, the file is in the database and will be skipped
+            # If the file doesn't exist anymore, remove it from the database
             if not os.path.isfile(file_path):
                 if metadata.get("XMP:Identifier"):
                     self.db.remove(where("XMP:Identifier") == metadata.get("XMP:Identifier"))
@@ -658,8 +733,7 @@ class FileProcessor:
 
             if not self.config.dry_run:
                 metadata_added = self.check_uuid(metadata, file_path)
-                if metadata_added is None:
-                    
+                if metadata_added is None:                    
                     return
                 else:
                     metadata = metadata_added
@@ -678,25 +752,23 @@ class FileProcessor:
                         self.total_processing_time += processing_time
                         self.files_processed += 1
                         average_time = self.total_processing_time / self.files_processed
-
-                        #self.callback(f"File processed: {file_path}")
                         self.callback(
                             f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
                         )
                         self.callback(
                             f"Files processed: {self.files_processed}, Files remaining in queue: {self.files_in_queue}"
                         )
-                        return True
+                        return
+                        
                     elif metadata.get("status") == "failed":
                         if not self.config.dry_run:
                             self.update_db(metadata)
-                            return True
+                        return
                     elif metadata.get("status") == "retry":
                         self.process_file(metadata)
                     else:
                         print(f"Error processing file: {file_path}")
                         return
-
                 if self.check_pause_stop():
                     return
             else:
@@ -704,9 +776,10 @@ class FileProcessor:
 
         except Exception as e:
             print(f"Error processing: {file_path}: {str(e)}")
+            metadata["status"] = "failed"
             if not self.config.dry_run:
-                metadata["status"] = "failed"
                 self.update_db(metadata)
+            return
                 
     def extract_values(self, data):
         """ Goes through a dict and pulls all the 
@@ -736,10 +809,7 @@ class FileProcessor:
         """
         all_keywords = set()
         if self.config.update_keywords:
-            all_keywords.update(metadata.get("IPTC:Keywords", []))
-            all_keywords.update(metadata.get("MWG:Keywords", []))
             all_keywords.update(metadata.get("Keywords", []))
-            all_keywords.update(metadata.get("XMP:Subject", []))
 
         extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
         if extracted_keywords is None:
@@ -749,7 +819,7 @@ class FileProcessor:
 
         # Normalize only the extracted keywords
         for keyword in extracted_keywords:
-            normalized = normalize_keyword(keyword, self.banned_words)
+            normalized = normalize_keyword(keyword, self.banned_words, self.replaced_words)
             if normalized:
                 processed_keywords.add(normalized)
 
@@ -761,16 +831,15 @@ class FileProcessor:
         else:
             return None
 
-    def get_metadata(self, file_path):
-        try:
-            with exiftool.ExifToolHelper() as et:
-                metadata = et.get_tags([file_path], self.exiftool_fields)[0]
-            return metadata
-        except Exception as e:
-            print(f"Error getting metadata for {file_path}: {str(e)}")
-            return None
-
     def update_metadata(self, metadata, base64_image):
+        """ The meat and potatoes. It should be pretty easy to follow.
+            First query the LLM, fix the inevitably malformed JSON,
+            check to see if there is a dict with value Keywords. Put them
+            in, clearing other keyword fields. If it fails any part, mark retry
+            and try again. Another fail gets marked as fail. exiftool helper
+            is called at the end to put the metdata in.
+        """
+        
         file_path = metadata["SourceFile"]
 
         try:
@@ -789,8 +858,6 @@ class FileProcessor:
                     f"---\nImage: {os.path.basename(file_path)}\nKeywords: "
                     + ", ".join(xmp_metadata.get("MWG:Keywords", ""))
                 )
-                xmp_metadata["status"] = "success"
-                metadata["status"] = "success"
         except:
             print(f"CANNOT parse keywords for {file_path}")
             if metadata.get("status") == "retry" or metadata.get("status") == "failed":
@@ -798,7 +865,7 @@ class FileProcessor:
                 self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.")
             else:
                 metadata["status"] = "retry"
-                #self.callback(f"CANNOT parse keywords for {file_path}; it will be retried one time.")
+             
             return metadata
 
         if self.config.dry_run:
@@ -817,9 +884,12 @@ class FileProcessor:
                 else:
                     with exiftool.ExifToolHelper() as et:
                         et.set_tags(file_path, tags=xmp_metadata)
+                metadata["status"] = "success"
+                xmp_metadata["status"] = "success"
                 self.update_db(xmp_metadata)
                 self.callback(output)
-                return xmp_metadata
+                return metadata
+            
             except Exception as e:
                 print(f"Error updating metadata for {file_path}: {str(e)}")
                 if metadata.get("status") == "retry" or metadata.get("status") == "failed":
