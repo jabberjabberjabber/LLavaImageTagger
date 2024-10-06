@@ -2,13 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-LLMImageIndexer is an intelligent image processing and indexing tool that leverages local AI to generate comprehensive metadata for your image collection. This tool uses advanced language models to analyze images and generate keyword metadata without sending any data over the internet, ensuring your privacy and data security.
+LLMImageIndexer is an intelligent image processing and indexing tool that leverages local AI to generate comprehensive metadata for your image collection. This tool uses advanced language models to analyze images and generate captions and keyword metadata.
 
 ![Screenshot](capture.gif)
 
 ## Features
  
-- **Intelligent Image Analysis**: Utilizes a local AI model to generate a variable number of keywords for each image.
+- **Intelligent Image Analysis**: Utilizes a local AI model to generate a variable number of keywords and a caption for each image.
 - **Metadata Enhancement**: Can automatically edit image metadata with generated tags.
 - **Local Processing**: All processing is done locally on your machine.
 - **Multi-Format Support**: Handles a wide range of image formats, including all major raw camera files.
