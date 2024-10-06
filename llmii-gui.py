@@ -69,9 +69,15 @@ class ImageIndexerGUI(QMainWindow):
         layout.addLayout(api_layout)
         
         # Instruction
-        instruction_layout = QHBoxLayout()
         
-        self.instruction_input = QLineEdit("Generate unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}")
+        instruction_layout = QHBoxLayout()
+        self.caption_instruction_input = QLineEdit("Describe the image in detail. Be specific.")
+        
+        
+        self.instruction_input = QLineEdit("Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}")
+        instruction_layout.addWidget(QLabel("Caption Instruction:"))
+        instruction_layout.addWidget(self.caption_instruction_input)
+        
         instruction_layout.addWidget(QLabel("Instruction:"))
         instruction_layout.addWidget(self.instruction_input)
         layout.addLayout(instruction_layout)
@@ -85,14 +91,14 @@ class ImageIndexerGUI(QMainWindow):
         self.skip_orphans_checkbox = QCheckBox("Skip images previously processed but not in database")
         self.no_backup_checkbox = QCheckBox("Don't make backups before writing")
         self.dry_run_checkbox = QCheckBox("Pretend mode (do not write to files)")
-        self.text_completion_checkbox = QCheckBox("Don't use instruct templates")
+        self.write_caption_checkbox = QCheckBox("Write a caption and place in XMP:Description")
         options_layout.addWidget(self.no_crawl_checkbox)
         options_layout.addWidget(self.no_backup_checkbox)
         options_layout.addWidget(self.reprocess_failed_checkbox)
         options_layout.addWidget(self.reprocess_all_checkbox)
         options_layout.addWidget(self.skip_orphans_checkbox)
-        options_layout.addWidget(self.text_completion_checkbox)
         options_layout.addWidget(self.dry_run_checkbox)
+        options_layout.addWidget(self.write_caption_checkbox)
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
 
@@ -169,7 +175,7 @@ class ImageIndexerGUI(QMainWindow):
         config.skip_orphans = self.skip_orphans_checkbox.isChecked()
         
         config.no_backup = self.no_backup_checkbox.isChecked()
-        config.text_completion = self.text_completion_checkbox.isChecked()
+        config.write_caption = self.write_caption_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
         config.instruction = self.instruction_input.text()
         if self.overwrite_keywords_radio.isChecked():

@@ -1,4 +1,4 @@
-import os, json, time, re, argparse, exiftool, requests, base64
+import os, json, time, re, argparse, exiftool, requests, base64, threading, queue
 from pillow_heif import register_heif_opener
 from PIL import Image
 import io
@@ -60,7 +60,19 @@ def normalize_keyword(keyword, banned_words, replaced_words):
         keyword = None
     
     return keyword
-
+    
+def clean_string(data):
+    if isinstance(data, dict):
+        data = json.dumps(data)
+    if isinstance(data, str):
+        data = re.sub(r"\n", "", data)
+        data = re.sub(r'["""]', '"', data)
+        data = re.sub(r"\\{2}", "", data)
+        last_period = data.rfind('.')
+        if last_period != -1:
+            data = data[:last_period+1]
+    return data
+    
 def markdown_list_to_dict(text):
     """ Searches a string for a markdown formatted
         list, and if one is found, converts it to
@@ -185,6 +197,8 @@ class Config:
         self.skip_orphans = True
         self.text_completion = False
         self.gen_count = 150
+        self.write_caption = False
+        self.caption_instruction = "Describe the image in detail. Be specific."
         self.system_instruction = "You are a helpful assistant."
         self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
 
@@ -225,11 +239,9 @@ class Config:
             "--update-keywords", action="store_true", help="Update existing keyword metadata"
         )
         parser.add_argument(
-            "--text-completion", action="store_true", help="Ignore instruct templates"
-        )
-        parser.add_argument(
             "--gen-count", default=150, help="Number of tokens to generate"
         )
+        parser.add_argument("--write-description", action="store_true", help="Write description in separate file")
         args = parser.parse_args()
 
         config = cls()
@@ -321,7 +333,7 @@ class LLMProcessor:
             "Authorization": f"Bearer {config.api_password}",
         }
         self.genkey = self._create_genkey()
-
+        self.caption_instruction = config.caption_instruction
         # you may have to add an entry name for a finetune with
         # a different name than its base
         self.templates = {
@@ -410,11 +422,18 @@ class LLMProcessor:
             print(f"Error calling API: {str(e)}")
             return None
 
-    def describe_content(self, base64_image):
+    def describe_content(self, base64_image, task="keywords"):
         """ Samplers should not be used but Kobold sets some by default 
             if they aren't specified
         """
-        prompt = self.get_prompt(instruction=self.instruction)
+        if task == "keywords":
+            instruction = self.instruction
+        elif task == "caption":
+            instruction = self.caption_instruction
+        else:
+            print(f"Invalid task {task}")
+            return None
+        prompt = self.get_prompt(instruction)
         payload = {
             "prompt": prompt,
             "max_length": self.config.gen_count,
@@ -506,7 +525,36 @@ class LLMProcessor:
         payload = {"prompt": content, "genkey": self.genkey}
         return self._call_api("tokencount", payload)
 
+class BackgroundIndexer(threading.Thread):
+    def __init__(self, root_dir, metadata_queue, file_extensions, no_crawl=False):
+        threading.Thread.__init__(self)
+        self.root_dir = root_dir
+        self.metadata_queue = metadata_queue
+        self.file_extensions = file_extensions
+        self.no_crawl = no_crawl
+        self.total_files_found = 0
+        self.indexing_complete = False
+        
 
+    def run(self):
+        if self.no_crawl:
+            self._index_directory(self.root_dir)
+        else:
+            for root, _, _ in os.walk(self.root_dir):
+                self._index_directory(root)
+        self.indexing_complete = True
+
+    def _index_directory(self, directory):
+        files = []
+        for filename in os.listdir(directory):
+            file_path = os.path.join(directory, filename)
+            if os.path.isfile(file_path) and any(file_path.lower().endswith(ext) for ext in self.file_extensions):
+                files.append(file_path)
+        
+        if files:
+            self.total_files_found += len(files)
+            self.metadata_queue.put((directory, files))
+            
 class FileProcessor:
     def __init__(self, config, image_processor, check_paused_or_stopped, callback):
         self.config = config
@@ -521,6 +569,8 @@ class FileProcessor:
         self.files_in_queue = 0
         self.total_processing_time = 0
         self.files_processed = 0
+        self.files_completed = 0
+        
         # Words in the prompt tend to get repeated back by certain models
         self.banned_words = ["main subject", "living beings", "actions", "setting", "objects", "visual qualities", "atmosphere", "composition", "mood", "textures", "weather", "season", "time of", "structures", "elements", "location", "environment", "background", "activities", "elements", "appearance", "gender", "professions", "relationships", "identify"]
         
@@ -530,7 +580,8 @@ class FileProcessor:
         # conforming to where they are or what they actually are named
         self.exiftool_fields = [
             #"XMP:Description",
-            #"XMP:Subject",
+            "Subject",
+            "Keywords",
             "MWG:Keywords",
             "XMP:Identifier",
             "FileType",
@@ -581,6 +632,15 @@ class FileProcessor:
                 ".rwl",  # Leica
             ],
         }
+        
+        self.metadata_queue = queue.Queue()
+        self.indexer = BackgroundIndexer(
+            config.directory, 
+            self.metadata_queue, 
+            [ext for exts in self.image_extensions.values() for ext in exts], 
+            config.no_crawl
+        )
+        self.indexer.start()
 
     def get_file_type(self, file_ext):
         """ If the filetype is supported, return the key
@@ -604,6 +664,9 @@ class FileProcessor:
             identifier = metadata.get("XMP:Identifier")
             source_file = self.db.get(where("SourceFile") == file_path)
             existing_entry = self.db.get(where("XMP:Identifier") == identifier)
+            are_keywords = False
+            if metadata.get("Keywords") or metadata.get("Subject"):
+                are_keywords = True
             
             # Case 1: File has a UUID in metadata
             if identifier:
@@ -617,7 +680,7 @@ class FileProcessor:
                         return metadata
                     return None 
                 # Orphan -- has UUID and Keywords but not in db
-                if self.config.skip_orphans and metadata.get("Keywords"):
+                if self.config.skip_orphans and are_keywords:
                     return None
                 return metadata  
 
@@ -689,28 +752,36 @@ class FileProcessor:
         return files
 
     def process_directory(self, directory):
-        files = self.list_files(directory)
-        metadata_list = []
-        try:
-            with exiftool.ExifToolHelper() as et:
-                metadata_list = et.get_tags(files, self.exiftool_fields)
-
-        except Exception as e:
-            self.callback(f"Directory has no images: {directory}")
-
-        for metadata in metadata_list:
-            # Files removed from queue here because it doesn't matter
-            # if they are actually processed, just that they got sent
-            # to processing
-            if self.files_in_queue > 0:
-                self.files_in_queue -= 1
+        while not (self.indexer.indexing_complete and self.metadata_queue.empty()):
             if self.check_pause_stop():
                 return
-            if metadata:
-                self.process_file(metadata)
-            else:
-                pass
-            
+            try:
+                directory, files = self.metadata_queue.get(timeout=1)
+                self.callback(f"Processing directory: {directory}")
+                metadata_list = self._get_metadata_batch(files)
+                for metadata in metadata_list:
+                    self.files_processed += 1
+                    if metadata:
+                        self.process_file(metadata)
+                    if self.check_pause_stop():
+                        return
+                self.update_progress()
+                
+            except queue.Empty:
+                continue
+                
+    def _get_metadata_batch(self, files):
+        try:
+            with exiftool.ExifToolHelper() as et:
+                return et.get_tags(files, self.exiftool_fields)         
+        except Exception as e:
+            return []
+
+    def update_progress(self):
+        files_processed = self.files_processed
+        files_remaining = self.indexer.total_files_found - files_processed
+        self.callback(f"Directory processed. Files remaining in queue: {files_remaining}")
+        
     def process_file(self, metadata):
         """ This is a lot more complicated than it should be.
             We only use UUID set in XMP:Identifier to ID files
@@ -745,18 +816,31 @@ class FileProcessor:
                 # Send image encoded in base64 to be processed by LLM
                 image_object_or_path = self.image_processor.route_image(file_path, image_type)
                 if image_object_or_path:
+                    if self.config.write_caption:
+                        caption = self.write_caption(image_object_or_path)
+                        if caption:
+                            metadata["Description"] = caption
+                            #print (metadata["Description"])
                     metadata = self.update_metadata(metadata, image_object_or_path)
+                    
                     if metadata.get("status") == "success":    
                         end_time = time.time()
                         processing_time = end_time - start_time
                         self.total_processing_time += processing_time
-                        self.files_processed += 1
-                        average_time = self.total_processing_time / self.files_processed
+                        self.files_completed += 1
+                        in_queue = self.indexer.total_files_found - self.files_processed
+                        average_time = self.total_processing_time / self.files_completed
+                        time_left = average_time * in_queue
+                        time_left_unit = "s"
+                        if time_left > 180:
+                            time_left = time_left / 60
+                            time_left_unit = "m"
+                        
                         self.callback(
                             f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
                         )
                         self.callback(
-                            f"Files processed: {self.files_processed}, Files remaining in queue: {self.files_in_queue}"
+                            f"Processed: {self.files_processed}, In queue: {in_queue}, Time remaining (est): {time_left:.2f}{time_left_unit}"
                         )
                         return
                         
@@ -830,7 +914,15 @@ class FileProcessor:
             return list(processed_keywords)
         else:
             return None
-
+    
+    def write_caption(self, base64_image):
+        task = "caption"
+        caption = ""
+        try:
+            return clean_string(self.llm_processor.describe_content(base64_image, task))
+        except:
+            return 
+        
     def update_metadata(self, metadata, base64_image):
         """ The meat and potatoes. It should be pretty easy to follow.
             First query the LLM, fix the inevitably malformed JSON,
@@ -841,11 +933,13 @@ class FileProcessor:
         """
         
         file_path = metadata["SourceFile"]
-
+        
         try:
             llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+
             if llm_metadata["Keywords"] or llm_metadata["keywords"]:
                 xmp_metadata = {}
+                xmp_metadata["XMP:Description"] = metadata.get("Description")
                 xmp_metadata["XMP:Identifier"] = metadata.get(
                     "XMP:Identifier", str(uuid.uuid4())
                 )
@@ -858,6 +952,8 @@ class FileProcessor:
                     f"---\nImage: {os.path.basename(file_path)}\nKeywords: "
                     + ", ".join(xmp_metadata.get("MWG:Keywords", ""))
                 )
+                if xmp_metadata.get("XMP:Description"):
+                    output +=  (f"\nCaption: {xmp_metadata.get('XMP:Description')}")
         except:
             print(f"CANNOT parse keywords for {file_path}")
             if metadata.get("status") == "retry" or metadata.get("status") == "failed":
@@ -910,26 +1006,18 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
         config, image_processor, check_paused_or_stopped, callback
     )
 
-    if config.no_crawl:
-        try:
-            file_processor.process_directory(config.directory)
-        except Exception as e:
-            print(f"An error occurred during processing: {str(e)}")
-            if callback:
-                callback(f"Error: {str(e)}")
-    else:
-        directories = [root for root, _, _ in os.walk(config.directory)]
-
-        for directory in directories:
-            if check_paused_or_stopped and check_paused_or_stopped():
-                print("Processing stopped by user.")
-                break
-            try:
-                file_processor.process_directory(directory)
-            except Exception as e:
-                print(f"Error processing directory {directory}: {str(e)}")
 
 
+    try:
+        file_processor.process_directory(config.directory)
+    except Exception as e:
+        print(f"An error occurred during processing: {str(e)}")
+        if callback:
+            callback(f"Error: {str(e)}")
+    finally:
+        print("Waiting for indexer to complete...")
+        file_processor.indexer.join()
+        print("Indexing completed.")
 
 
 if __name__ == "__main__":
