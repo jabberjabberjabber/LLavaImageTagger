@@ -4,7 +4,7 @@
 
 LLMImageIndexer is an intelligent image processing and indexing tool that leverages local AI to generate comprehensive metadata for your image collection. This tool uses advanced language models to analyze images and generate captions and keyword metadata.
 
-![Screenshot](capture.gif)
+![Screenshot](window.png)
 
 ## Features
  
