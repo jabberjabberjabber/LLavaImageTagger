@@ -56,7 +56,7 @@ def normalize_keyword(keyword, banned_words, replaced_words):
     if re.match(r"^\d{3,}", words[0]):
         return None
     # First word cannot be less than 2 chars
-    if len(word[0]) < 2:
+    if len(words[0]) < 2:
         return None
         
     # Two word max unless middle word is 'and'
