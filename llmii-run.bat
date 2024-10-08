@@ -67,6 +67,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Download NLTK data
+echo Downloading NLTK data...
+python -c "import nltk; nltk.download('wordnet')"
+
 REM Launch your Python script
 start koboldcpp.exe --config llmii.kcppt
 python llmii-gui.py

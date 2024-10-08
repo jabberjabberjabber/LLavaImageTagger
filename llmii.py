@@ -1,15 +1,11 @@
-import os, json, time, re, argparse, exiftool, requests, base64, threading, queue
+import os, json, time, re, argparse, exiftool, requests, base64, threading, queue, calendar, io, random, rawpy, uuid
 from pillow_heif import register_heif_opener
 from PIL import Image
-import io
-import random
-import rawpy
-import uuid
 from tinydb import TinyDB, where, Query
 from json_repair import repair_json as rj
 from datetime import timedelta
 from fix_busted_json import first_json
-
+from keyword_processor import KeywordProcessor
 
 # TODO:
 # =====
@@ -18,10 +14,27 @@ from fix_busted_json import first_json
 # Handle API rejections gracefully
 # Check for broken list item
 
+def run_keyword_processing(config, callback):
+    if config.keyword_processing in ["expand", "dedupe"]:
+        callback(f"Running keyword processing in {config.keyword_processing} mode (be patient)...")
+        processor = KeywordProcessor()
+        updated_file_keywords = processor.process_directory(config.directory, config.keyword_processing, config.no_crawl)
+        
+        if updated_file_keywords:
+            callback(f"Updating metadata for {len(updated_file_keywords)} files...")
+            if config.dry_run is False:
+                before_keyword_len, after_keyword_len = processor.update_metadata(updated_file_keywords, config.no_backup)
+                callback(f"Keyword processing complete.\nTotal keywords before: {before_keyword_len}, total keywords after: {after_keyword_len}")
+            else:
+                callback("Not updated: dry-run is enabled")
+        else:
+            callback("No changes were necessary after keyword processing.")
+    else:
+        callback("Keyword processing skipped (set to 'keep').")
 
 def normalize_keyword(keyword, banned_words, replaced_words):
     """ Prevents bad keywords by banning regularly malformed 
-        sequences or words indicative or bad generations
+        sequences or words indicative of bad generations
     """
     keyword = str(keyword).lower().strip()
     
@@ -39,7 +52,7 @@ def normalize_keyword(keyword, banned_words, replaced_words):
         
     # Swap slop
     for subst_word, common_words in replaced_words.items():
-        if keyword in [commond_word.lower() for commond_word in common_words]:
+        if keyword in [common_word.lower() for common_word in common_words]:
             keyword = subst_word
             break
     
@@ -49,17 +62,40 @@ def normalize_keyword(keyword, banned_words, replaced_words):
     if re.match(r"^\d{3,}", words[0]):
         return None
     
-    
     # Two word max unless middle word is 'and'
-    if len(words) > 2 and [words[1] != 'and' and words[1] != 'or']:
+    if len(words) > 2 and words[1] not in ['and', 'or']:
         keyword = ' '.join(words[:2])
     else:
         keyword = ' '.join(words[:3])
     
     if re.match(r"^\d{5,}", keyword) or any(keyword.startswith(word) for word in banned_words):
-        keyword = None
+        return None
     
-    return keyword
+    # New conditions
+    words = keyword.split()
+    filtered_words = []
+    months = [month.lower() for month in calendar.month_name if month]
+    days = [day.lower() for day in calendar.day_name]
+    
+    for word in words:
+        # Cannot be less than 2 chars
+        if len(word) < 2:
+            continue
+        # Cannot be a month or a day
+        if word in months or word in days:
+            continue
+        # Cannot be longer than 20 chars per word
+        if len(word) > 20:
+            continue
+        # Cannot have more than one hyphen
+        if word.count('-') > 1:
+            continue
+        filtered_words.append(word)
+    
+    if not filtered_words:
+        return None
+    
+    return ' '.join(filtered_words)
     
 def clean_string(data):
     if isinstance(data, dict):
@@ -198,6 +234,8 @@ class Config:
         self.text_completion = False
         self.gen_count = 150
         self.write_caption = False
+        self.skip_processing = False
+        self.keyword_processing = "keep"
         self.caption_instruction = "Describe the image in detail. Be specific."
         self.system_instruction = "You are a helpful assistant."
         self.instruction = "Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\\n1. Main subject of the image\\n2. Physical appearance and clothing, gender, age, professions and relationships\\n3. Actions or state of the main elements\\n4. Setting or location, environment, or background\\n5. Notable items, structures, or elements\\n6. Colors and textures, patterns, or lighting\\n7. Atmosphere and mood, time of day, season, or weather\\n8. Composition and perspective, framing, or style of the photo.\\n9. Any other relevant keywords.\\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}"
@@ -237,6 +275,15 @@ class Config:
         )
         parser.add_argument(
             "--update-keywords", action="store_true", help="Update existing keyword metadata"
+        )
+        parser.add_argument(
+            "--skip-processing", action="store_true", help="Skip processing and go to post-processing step"
+        )
+        parser.add_argument(
+            "--keyword-processing",
+            choices=["keep", "expand", "dedupe"],
+            default="keep",
+            help="Keyword post-processing method: keep as generated, expand synonyms, or deduplicate"
         )
         parser.add_argument(
             "--gen-count", default=150, help="Number of tokens to generate"
@@ -572,19 +619,18 @@ class FileProcessor:
         self.files_completed = 0
         
         # Words in the prompt tend to get repeated back by certain models
-        self.banned_words = ["main subject", "living beings", "actions", "setting", "objects", "visual qualities", "atmosphere", "composition", "mood", "textures", "weather", "season", "time of", "structures", "elements", "location", "environment", "background", "activities", "elements", "appearance", "gender", "professions", "relationships", "identify"]
+        self.banned_words = ["main", "no", "year", "years", "unspecified", "perspective", "unknown", "standard", "unindentified", "type", "time", "category", "living", "actions", "setting", "objects", "visual", "atmosphere", "composition", "mood", "textures", "weather", "season", "structures", "elements", "location", "environment", "background", "activities", "elements", "appearance", "gender", "professions", "relationships", "identify"]
         
         self.replaced_words = {}
-            
+          
         # These are the fields we check. ExifTool returns are kind of strange, not always
         # conforming to where they are or what they actually are named
         self.exiftool_fields = [
             #"XMP:Description",
-            "Subject",
-            "Keywords",
             "MWG:Keywords",
             "XMP:Identifier",
-            "FileType",
+            
+            #"FileType",
         ]
 
         # untested formats:
@@ -632,7 +678,6 @@ class FileProcessor:
                 ".rwl",  # Leica
             ],
         }
-        
         self.metadata_queue = queue.Queue()
         self.indexer = BackgroundIndexer(
             config.directory, 
@@ -641,7 +686,7 @@ class FileProcessor:
             config.no_crawl
         )
         self.indexer.start()
-
+        
     def get_file_type(self, file_ext):
         """ If the filetype is supported, return the key
             so .nef would return RAW. Otherwise return
@@ -665,7 +710,7 @@ class FileProcessor:
             source_file = self.db.get(where("SourceFile") == file_path)
             existing_entry = self.db.get(where("XMP:Identifier") == identifier)
             are_keywords = False
-            if metadata.get("Keywords") or metadata.get("Subject"):
+            if metadata.get("Keywords"):
                 are_keywords = True
             
             # Case 1: File has a UUID in metadata
@@ -759,23 +804,40 @@ class FileProcessor:
                 directory, files = self.metadata_queue.get(timeout=1)
                 self.callback(f"Processing directory: {directory}")
                 metadata_list = self._get_metadata_batch(files)
+                
                 for metadata in metadata_list:
                     self.files_processed += 1
+                    
                     if metadata:
+                        keywords = metadata.get("Keywords", [])
+                        if metadata.get("Composite:Keywords"):
+                            keywords += metadata.get("Composite:Keywords")
+                        if metadata.get("Subject"):
+                            keywords += metadata.get("Subject")
+                        if metadata.get("IPTC:Keywords"):
+                            keywords += metadata.get("IPTC:Keywords")                            
+                        if keywords:
+                            metadata["Keywords"] = keywords
                         self.process_file(metadata)
+                    
                     if self.check_pause_stop():
                         return
+                self.files_processed +=1
                 self.update_progress()
                 
             except queue.Empty:
                 continue
                 
     def _get_metadata_batch(self, files):
-        try:
-            with exiftool.ExifToolHelper() as et:
-                return et.get_tags(files, self.exiftool_fields)         
-        except Exception as e:
-            return []
+        #try:
+        with exiftool.ExifToolHelper(check_execute=False) as et:
+            
+            return et.get_tags(files, tags=self.exiftool_fields)         
+            #print(tags)
+            
+        #except Exception as e:
+        #    print("Error")
+        #    return []
 
     def update_progress(self):
         files_processed = self.files_processed
@@ -804,7 +866,8 @@ class FileProcessor:
 
             if not self.config.dry_run:
                 metadata_added = self.check_uuid(metadata, file_path)
-                if metadata_added is None:                    
+                if metadata_added is None:
+                    #self.files_processed += 1 
                     return
                 else:
                     metadata = metadata_added
@@ -828,13 +891,14 @@ class FileProcessor:
                         processing_time = end_time - start_time
                         self.total_processing_time += processing_time
                         self.files_completed += 1
+                        
                         in_queue = self.indexer.total_files_found - self.files_processed
                         average_time = self.total_processing_time / self.files_completed
                         time_left = average_time * in_queue
                         time_left_unit = "s"
                         if time_left > 180:
                             time_left = time_left / 60
-                            time_left_unit = "m"
+                            time_left_unit = "mins"
                         
                         self.callback(
                             f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
@@ -1000,25 +1064,35 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
 
-    image_processor = ImageProcessor()
+    if config.skip_processing is False:        
+        image_processor = ImageProcessor()
 
-    file_processor = FileProcessor(
-        config, image_processor, check_paused_or_stopped, callback
-    )
+        file_processor = FileProcessor(
+            config, image_processor, check_paused_or_stopped, callback
+        )
 
-
-
-    try:
-        file_processor.process_directory(config.directory)
-    except Exception as e:
-        print(f"An error occurred during processing: {str(e)}")
-        if callback:
-            callback(f"Error: {str(e)}")
-    finally:
-        print("Waiting for indexer to complete...")
-        file_processor.indexer.join()
-        print("Indexing completed.")
-
+        try:
+            file_processor.process_directory(config.directory)
+            run_keyword_processing(config, callback)
+        except Exception as e:
+            print(f"An error occurred during processing: {str(e)}")
+            if callback:
+                callback(f"Error: {str(e)}")
+        finally:
+            print("Waiting for indexer to complete...")
+            file_processor.indexer.join()
+            print("Indexing completed.")
+    else:
+    
+        try:
+            run_keyword_processing(config, callback)
+            print("Postprocessing completed.")
+            if callback:
+                callback("Postprocessing completed.")
+        except Exception as e:
+            print(f"An error occurred during processing: {str(e)}")
+            if callback:
+                callback(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
