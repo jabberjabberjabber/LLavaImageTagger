@@ -55,7 +55,10 @@ def normalize_keyword(keyword, banned_words, replaced_words):
     # Cannot start with more than two digits
     if re.match(r"^\d{3,}", words[0]):
         return None
-    
+    # First word cannot be less than 2 chars
+    if len(word[0]) < 2:
+        return None
+        
     # Two word max unless middle word is 'and'
     if len(words) > 2 and words[1] not in ['and', 'or']:
         keyword = ' '.join(words[:2])
@@ -65,31 +68,7 @@ def normalize_keyword(keyword, banned_words, replaced_words):
     if re.match(r"^\d{5,}", keyword) or words[0] in banned_words:
         return None
     
-    # New conditions
-    words = keyword.split()
-    filtered_words = []
-    months = [month.lower() for month in calendar.month_name if month]
-    days = [day.lower() for day in calendar.day_name]
-    
-    for word in words:
-        # Cannot be less than 2 chars
-        if len(word) < 2:
-            continue
-        # Cannot be a month or a day
-        if word in months or word in days:
-            continue
-        # Cannot be longer than 20 chars per word
-        if len(word) > 20:
-            continue
-        # Cannot have more than one hyphen
-        if word.count('-') > 1:
-            continue
-        filtered_words.append(word)
-    
-    if not filtered_words:
-        return None
-    
-    return ' '.join(filtered_words)
+    return keyword
     
 def clean_string(data):
     if isinstance(data, dict):
