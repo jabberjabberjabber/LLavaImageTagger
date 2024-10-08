@@ -49,12 +49,6 @@ def normalize_keyword(keyword, banned_words, replaced_words):
     
     if keyword.startswith(""):
         return keyword
-        
-    # Swap slop
-    for subst_word, common_words in replaced_words.items():
-        if keyword in [common_word.lower() for common_word in common_words]:
-            keyword = subst_word
-            break
     
     words = keyword.split()
     
@@ -68,7 +62,7 @@ def normalize_keyword(keyword, banned_words, replaced_words):
     else:
         keyword = ' '.join(words[:3])
     
-    if re.match(r"^\d{5,}", keyword) or any(keyword.startswith(word) for word in banned_words):
+    if re.match(r"^\d{5,}", keyword) or words[0] in banned_words:
         return None
     
     # New conditions
