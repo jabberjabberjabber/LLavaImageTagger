@@ -4,7 +4,7 @@
 
 LLMImageIndexer is an intelligent image processing and indexing tool that leverages local AI to generate comprehensive metadata for your image collection. This tool uses advanced language models to analyze images and generate captions and keyword metadata.
 
-![Screenshot](window2.png)
+![Screenshot](caption.png)
 
 ## Features
  
@@ -16,6 +16,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - **GPU Acceleration**: Will use Apple Metal, Nvidia CUDA, or AMD (Vulkan) hardware if available to greatly speed inference.
 - **Cross-Platform**: Supports Windows, macOS ARM, and Linux.
 - **Stop and Start Capability**: Can stop and start without having to reprocess all the files again.
+- **Keyword Post-Processing**: Expand keywords so all synonyms are added to every image with one of the synonyms, or deduplicate keywords by using the most frequently used synonym in place of all matching synonyms.  
 
 ## Installation
 
@@ -107,12 +108,17 @@ For all platforms, the script will set up the Python environment, install depend
 - **Directory**: Target image directory (includes subdirectories by default)
 - **API URL**: KoboldCPP API endpoint (change if running on another machine)
 - **API Password**: Set if required by your KoboldCPP setup
+- **Caption**: Have the LLM describe the image and set it in XMP:Description (doubles processing time)
+- **GenTokens**: Amount of tokens for the LLM to generate
+- **Skip processed files not in database**: Will not attempt to reprocess files with a UUID and keywords even if they are not in the llmii.json database
 - **Reprocess failed**: If any files failed in the last round, it will try to process them again
 - **Reprocess ALL**: The files that are processed already are stored in a database and skipped if you resume later, this will do them all over again
 - **Don't crawl subdirectories**: Disable scanning of subdirectories
-- **Don't make backups before writing**: Skip creating backup files
+- **Don't make backups before writing**: Skip creating backup files (NOTE: this applies to processing and post-processing; if you enable post processing and leave this unchecked it will make a second backup!)
 - **Pretend mode**: Simulate processing without writing to files or database
+- **Skip processing**: If you want to use the keyword processing and don't want it to check every image in the directory before starting, check this box
 - **Keywords**: Choose to clear and write new keywords or update existing ones
+- **Post processing keywords**: Keep keywords as generated, Expand keywords by applying all synonyms to matching keywords, or Dedepe keywords by replacing matching synonyms with most frequent synonym; these option take place after the indexer has completed unless the 'skip processing' box is checked
 
 ## More Information and Troubleshooting
 
