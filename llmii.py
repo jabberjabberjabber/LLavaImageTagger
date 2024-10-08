@@ -23,8 +23,8 @@ def run_keyword_processing(config, callback):
         if updated_file_keywords:
             callback(f"Updating metadata for {len(updated_file_keywords)} files...")
             if config.dry_run is False:
-                before_keyword_len, after_keyword_len = processor.update_metadata(updated_file_keywords, config.no_backup)
-                callback(f"Keyword processing complete.\nTotal keywords before: {before_keyword_len}, total keywords after: {after_keyword_len}")
+                #before_keyword_len, after_keyword_len = processor.update_metadata(updated_file_keywords, config.no_backup)
+                #callback(f"Keyword processing complete.\nTotal keywords before: {before_keyword_len}, total keywords after: {after_keyword_len}")
             else:
                 callback("Not updated: dry-run is enabled")
         else:
