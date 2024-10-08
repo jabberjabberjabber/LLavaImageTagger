@@ -96,6 +96,8 @@ def markdown_list_to_dict(text):
         return None
         
 def find_keywords(data):
+    """ Claude wrote this one
+    """
     if isinstance(data, list):
         data = ' '.join(data)
     if not isinstance(data, str):
