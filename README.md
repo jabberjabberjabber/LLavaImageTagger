@@ -32,7 +32,7 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 2. Install [Python for Windows](https://www.python.org/downloads/windows/).
 
 3. Download [KoboldCPP.exe](https://github.com/LostRuins/koboldcpp/releases) and place it in the LlavaImageTagger folder. If it is not named KoboldCPP.exe, rename it to KoboldCPP.exe 
-![LLMImageIndexer Screenshot](Capture.PNG)
+
 4. Run `llmii-run.bat` and wait exiftool to install. When it is complete you must start the file again. If you called it from a terminal window you will need to close the windows and reopen it. It will then create a python environment and download the model weights. The download is quite large (6GB) and there is no progress bar, but it only needs to do this once. Once it is done KoboldCPP will start and one of the terminal windows will say ```Please connect to custom endpoint at http://localhost:5001``` and then it is ready.
 
 ### macOS Installation (including ARM)
