@@ -71,11 +71,23 @@ REM Download NLTK data
 echo Downloading NLTK data...
 python -c "import nltk; nltk.download('wordnet')"
 
-REM Launch your Python script
-start koboldcpp.exe --config llmii.kcppt
-python llmii-gui.py
+REM Check if koboldcpp.exe exists, if not, check for koboldcpp_cu12.exe
+if exist koboldcpp.exe (
+    set "KOBOLD_EXE=koboldcpp.exe"
+) else if exist koboldcpp_cu12.exe (
+    set "KOBOLD_EXE=koboldcpp_cu12.exe"
+) else (
+    echo Neither koboldcpp.exe nor koboldcpp_cu12.exe found. Please ensure one of these files exists.
+    pause
+    exit /b 1
+)
 
+REM Launch your Python script
+start %KOBOLD_EXE% --config llmii.kcppt
+
+python llmii-gui.py
 pause
+
 REM Deactivate the virtual environment
 deactivate
 
