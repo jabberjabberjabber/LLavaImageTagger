@@ -7,24 +7,16 @@ from datetime import timedelta
 from fix_busted_json import first_json
 from keyword_processor import KeywordProcessor
 
-# TODO:
-# =====
-# Check file sizes before processing
-# Move top functions to a utilities file
-# Handle API rejections gracefully
-# Check for broken list item
-
-def run_keyword_processing(config, callback):
+def run_keyword_processing(config, callback, file_processor):
     if config.keyword_processing in ["expand", "dedupe"]:
         callback(f"Running keyword processing in {config.keyword_processing} mode (be patient)...")
-        processor = KeywordProcessor()
+        processor = KeywordProcessor(file_processor.image_extensions, file_processor.get_file_type)
         updated_file_keywords = processor.process_directory(config.directory, config.keyword_processing, config.no_crawl)
         
         if updated_file_keywords:
             callback(f"Updating metadata for {len(updated_file_keywords)} files...")
             if config.dry_run is False:
-                #before_keyword_len, after_keyword_len = processor.update_metadata(updated_file_keywords, config.no_backup)
-                #callback(f"Keyword processing complete.\nTotal keywords before: {before_keyword_len}, total keywords after: {after_keyword_len}")
+                after_keywords = processor.update_metadata(updated_file_keywords, config.no_backup)
             else:
                 callback("Not updated: dry-run is enabled")
         else:
@@ -51,14 +43,13 @@ def normalize_keyword(keyword, banned_words, replaced_words):
         return keyword
     
     words = keyword.split()
-    
-    # Cannot start with more than two digits
-    if re.match(r"^\d{3,}", words[0]):
-        return None
-    # First word cannot be less than 2 chars
     if len(words[0]) < 2:
         return None
         
+    # Cannot start with more than two digits
+    if re.match(r"^\d{3,}", words[0]):
+        return None
+    
     # Two word max unless middle word is 'and'
     if len(words) > 2 and words[1] not in ['and', 'or']:
         keyword = ' '.join(words[:2])
@@ -96,47 +87,34 @@ def markdown_list_to_dict(text):
         return None
         
 def find_keywords(data):
-    """ Claude wrote this one
-    """
     if isinstance(data, list):
         data = ' '.join(data)
     if not isinstance(data, str):
         return data
         
-    # Define the regex pattern to find 'keyword:' or 'keywords:' case-insensitively
     pattern = re.compile(r'(?i)(keyword|keywords):', re.IGNORECASE)
 
-    # Find the match
     match = pattern.search(data)
     if not match:
         return {}
 
-    # Extract the portion of the string after the matched keyword
     remaining_string = data[match.end():].strip()
-
-    # Initialize the list to hold the keywords
     keywords = []
 
-    # Check for different formats of the list
     if '[' in remaining_string and ']' in remaining_string:
-        # JSON-like list format
         try:
-            # Extract the list part and evaluate it
             list_part = remaining_string[remaining_string.index('['):remaining_string.index(']')+1]
             keywords = eval(list_part)
         except:
             pass
     elif remaining_string.startswith('-'):
-        # Bullet-point list format
         lines = remaining_string.split('\n')
         for line in lines:
             line = line.strip()
             if line.startswith('-'):
                 keywords.append(line[1:].strip())
     else:
-        # Comma-separated list format
         keywords = [word.strip() for word in remaining_string.split(',') if word.strip()]
-
     return {"Keywords": keywords}
     
 def clean_json(data):
@@ -185,11 +163,9 @@ def clean_json(data):
             if result.get("Keywords"):
                 return result
             
-            return find_keywords(copied_data)
-            
+            return find_keywords(copied_data)           
         except:
-            print(f"Failed to parse JSON: {data}")
-            
+            print(f"Failed to parse JSON: {data}")          
     return None
 
 
@@ -393,8 +369,8 @@ class LLMProcessor:
             },
             6: {
                 "name": ["Mistral", "bakllava"],
-                "user": "\n[INST] ",
-                "assistant": " [/INST]\n",
+                "user": "[INST] ",
+                "assistant": " [/INST]",
                 "system": None,
             },
             7: {
@@ -461,7 +437,6 @@ class LLMProcessor:
             "max_length": self.config.gen_count,
             "images": [base64_image],
             "genkey": self.genkey,
-            #"model": "clip",
             "top_p": 1,
             "top_k": 0,
             "temp": 0,
@@ -497,7 +472,6 @@ class LLMProcessor:
                     normalize(name) in normalized_model_name for name in template_name
                 )
             return normalize(template_name) in normalized_model_name
-
         matched_template = max(
             (
                 (
@@ -516,15 +490,13 @@ class LLMProcessor:
             key=lambda x: x[1],
             default=(None, 0),
         )[0]
-
         return matched_template if matched_template else self.templates[1]
 
     def get_prompt(self, instruction="", content=""):
         """ Uses the instruct templates to create a prompt with the proper
             start and end sequences. If the model name does not contain
             the name of the model it was based on, these may be incorrect.
-        """
-                
+        """              
         user_part = self.model["user"]
         assistant_part = self.model["assistant"]
         end_part = self.model.get("endTurn", "")
@@ -601,11 +573,8 @@ class FileProcessor:
         # These are the fields we check. ExifTool returns are kind of strange, not always
         # conforming to where they are or what they actually are named
         self.exiftool_fields = [
-            #"XMP:Description",
             "MWG:Keywords",
             "XMP:Identifier",
-            
-            #"FileType",
         ]
 
         # untested formats:
@@ -631,7 +600,6 @@ class FileProcessor:
             "PNG": [".png"],
             "GIF": [".gif"],
             "TIFF": [".tiff", ".tif"],
-            #"BMP": [".bmp", ".dib"],
             "WEBP": [".webp"],
             "HEIF": [".heif", ".heic"],
             "RAW": [
@@ -804,19 +772,15 @@ class FileProcessor:
                 continue
                 
     def _get_metadata_batch(self, files):
-        #try:
-        with exiftool.ExifToolHelper(check_execute=False) as et:
-            
+        with exiftool.ExifToolHelper(check_execute=False) as et:  
             return et.get_tags(files, tags=self.exiftool_fields)         
-            #print(tags)
-            
-        #except Exception as e:
-        #    print("Error")
-        #    return []
 
     def update_progress(self):
         files_processed = self.files_processed
         files_remaining = self.indexer.total_files_found - files_processed
+        if files_remaining < 0:
+            files_remaining = 0
+        
         self.callback(f"Directory processed. Files remaining in queue: {files_remaining}")
         
     def process_file(self, metadata):
@@ -842,7 +806,6 @@ class FileProcessor:
             if not self.config.dry_run:
                 metadata_added = self.check_uuid(metadata, file_path)
                 if metadata_added is None:
-                    #self.files_processed += 1 
                     return
                 else:
                     metadata = metadata_added
@@ -858,7 +821,6 @@ class FileProcessor:
                         caption = self.write_caption(image_object_or_path)
                         if caption:
                             metadata["Description"] = caption
-                            #print (metadata["Description"])
                     metadata = self.update_metadata(metadata, image_object_or_path)
                     
                     if metadata.get("status") == "success":    
@@ -982,11 +944,9 @@ class FileProcessor:
                 xmp_metadata["XMP:Identifier"] = metadata.get(
                     "XMP:Identifier", str(uuid.uuid4())
                 )
-                xmp_metadata["IPTC:Keywords"] = ""
-                xmp_metadata["XMP:Subject"] = ""
                 xmp_metadata["MWG:Keywords"] = self.process_keywords(
                     metadata, llm_metadata
-                )
+                )             
                 output = (
                     f"---\nImage: {os.path.basename(file_path)}\nKeywords: "
                     + ", ".join(xmp_metadata.get("MWG:Keywords", ""))
@@ -1039,16 +999,16 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
 
-    if config.skip_processing is False:        
-        image_processor = ImageProcessor()
+  
+    image_processor = ImageProcessor()
 
-        file_processor = FileProcessor(
-            config, image_processor, check_paused_or_stopped, callback
-        )
-
+    file_processor = FileProcessor(
+        config, image_processor, check_paused_or_stopped, callback
+    )
+    if config.skip_processing is False:      
         try:
             file_processor.process_directory(config.directory)
-            run_keyword_processing(config, callback)
+            run_keyword_processing(config, callback, file_processor)
         except Exception as e:
             print(f"An error occurred during processing: {str(e)}")
             if callback:
@@ -1060,7 +1020,7 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
     else:
     
         try:
-            run_keyword_processing(config, callback)
+            run_keyword_processing(config, callback, file_processor)
             print("Postprocessing completed.")
             if callback:
                 callback("Postprocessing completed.")
