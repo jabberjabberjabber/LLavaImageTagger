@@ -84,14 +84,14 @@ For all platforms, the script will set up the Python environment, install depend
 
 ## Usage
 
-1. Ensure KoboldCPP is running. Wait until you see the following message in the KoboldCPP window:
+1. Launch the LLMImageIndexer GUI:
+   - On Windows: Run `llmii-run.bat`
+   - On macOS/Linux: Run `python3 llmii-gui.py`
+
+2. Ensure KoboldCPP is running. Wait until you see the following message in the KoboldCPP window:
    ```
    Please connect to custom endpoint at http://localhost:5001
    ```
-
-2. Launch the LLMImageIndexer GUI:
-   - On Windows: Run `llmii-run.bat`
-   - On macOS/Linux: Run `python3 llmii-gui.py`
 
 3. Configure the indexing settings in the GUI:
    - Select the target image directory
