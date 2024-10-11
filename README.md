@@ -25,6 +25,8 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - Python 3.8 or higher
 - KoboldCPP
 
+**A vision model is needed, but if you use the llmii-run.bat to open it, then the first time it is run it will download the MiniCPM-V 2.6 Q4_K_M gguf and F16 projector from Bartowski's repo on huggingface. If you don't want to use that, just open llmii-no-kobold.bat instead and open Koboldcpp.exe and load whatever model you like.**
+  
 ### Windows Installation
 
 1. Clone the repository or download the [ZIP file](https://github.com/jabberjabberjabber/LLavaImageTagger/archive/refs/heads/main.zip) and extract it.
