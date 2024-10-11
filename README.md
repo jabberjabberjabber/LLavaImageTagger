@@ -18,6 +18,14 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 - **Stop and Start Capability**: Can stop and start without having to reprocess all the files again.
 - **Keyword Post-Processing**: Expand keywords so all synonyms are added to every image with one of the synonyms, or deduplicate keywords by using the most frequently used synonym in place of all matching synonyms.  
 
+## Important Information
+
+Before proceeding to use this script you should be aware of the following:
+
+ - This is a project made by someone completely unfamiliar with the formal protocols used by professional photographers. If you rely on your photography to pay bills, you should extensively test the effects of this script before running it on anything important
+ - If directed to write the metadata, it will write to following tags using exiftool: MWG:Keywords, XMP:Description, Status, XMP:Identifier. These are not necessarily the names of the tags that exiftool decides will be used. The exiftool developer is probably the foremost expert on file metadata schema and knows the appropriate place to put the metadata better than I could ever hope to. I did spent a lot of time on making this as 'low impact' as possible while still maintaining the ability to keep track of the state of processed images without a central database or repository of information so that the files can be moved anywhere or renamed without issue, but you need to ensure that your images will not be negatively impacted with the data in those fields
+ - This is a fairly technical process. Hopefully everything just works, and I tried to make that the case, but I have limited (re:none) ability to test this on other machines or platforms so any number of bugs can crop up. I will try hard to work with people to resolve issues but you should have the technical skills to troubleshoot and follow directions. If you cannot do that, you should proceed with hesitation.
+     
 ## Installation
 
 ### Prerequisites
