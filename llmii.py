@@ -288,20 +288,17 @@ class ImageProcessor:
 
                 return base64.b64encode(data).decode("utf-8")
         except Exception as e:
-            self.logger.error(f"Error processing {file_path}: {str(e)}")
+            print(f"Error processing {file_path}: {str(e)}")
         return None
 
     def process_raw_image(self, file_path):
         with rawpy.imread(file_path) as raw:
-
             try:
                 thumb = raw.extract_thumb()
                 if thumb.format == rawpy.ThumbFormat.JPEG:
                     return base64.b64encode(thumb.data).decode("utf-8")
-
             except:
                 pass
-
             rgb = raw.postprocess()
             img = Image.fromarray(rgb)
             buffer = io.BytesIO()
@@ -324,7 +321,6 @@ class LLMProcessor:
         }
 
         self.instruction = config.instruction
-
         self.api_url = config.api_url
         self.headers = {
             "Content-Type": "application/json",
@@ -404,7 +400,7 @@ class LLMProcessor:
         url = f"{self.api_url}{self.api_function_urls[api_function]}"
 
         try:
-            # Some API calls are POSTs and some are GETs, and the responses
+            # Some API calls are POSTs and some are GETs
             if api_function in ["tokencount", "generate", "check", "interrogate"]:
                 response = requests.post(url, json=payload, headers=self.headers)
                 result = response.json()
@@ -463,9 +459,7 @@ class LLMProcessor:
 
         def normalize(s):
             return re.sub(r"[^a-z0-9]", "", s.lower())
-
         normalized_model_name = normalize(model_name.lower())
-
         def check_match(template_name):
             if isinstance(template_name, list):
                 return any(
@@ -529,7 +523,6 @@ class BackgroundIndexer(threading.Thread):
         self.total_files_found = 0
         self.indexing_complete = False
         
-
     def run(self):
         if self.no_crawl:
             self._index_directory(self.root_dir)
@@ -581,7 +574,6 @@ class FileProcessor:
         # arq, crm, cr3, crw, ciff, erf, fff, flif, gpr, hdp, wdp,
         # heif, hif, iiq, insp, jpf, jpm, jpx, jph, mef, mos, mpo,
         # nrw, ori, jng, mng, qtif, qti, qif, sr2, x3f
-        
         self.image_extensions = {
             "JPEG": [
                 ".jpg",
@@ -647,7 +639,6 @@ class FileProcessor:
         """ Conditionals; very important or we end up with multiple
             DB entries or end up reprocessing files for no reason
         """ 
-        
         try:
             identifier = metadata.get("XMP:Identifier")
             source_file = self.db.get(where("SourceFile") == file_path)
@@ -667,6 +658,7 @@ class FileProcessor:
                     if existing_entry.get("status") == "retry":
                         return metadata
                     return None 
+                
                 # Orphan -- has UUID and Keywords but not in db
                 if self.config.skip_orphans and are_keywords:
                     return None
@@ -704,11 +696,11 @@ class FileProcessor:
             return
         try:
             uuid = metadata.get("XMP:Identifier")
-            
             db_entry = {
                 "XMP:Identifier": uuid,
                 "status": metadata.get("status", "success")
             }
+            
             # Successful processing should not have a sourcefile entry
             if metadata.get("status") in ["failed", "retry"]:
                 db_entry["SourceFile"] = metadata.get("SourceFile")
@@ -749,8 +741,7 @@ class FileProcessor:
                 metadata_list = self._get_metadata_batch(files)
                 
                 for metadata in metadata_list:
-                    self.files_processed += 1
-                    
+                    self.files_processed += 1        
                     if metadata:
                         keywords = metadata.get("Keywords", [])
                         if metadata.get("Composite:Keywords"):
@@ -762,7 +753,6 @@ class FileProcessor:
                         if keywords:
                             metadata["Keywords"] = keywords
                         self.process_file(metadata)
-                    
                     if self.check_pause_stop():
                         return
                 self.files_processed +=1
@@ -780,7 +770,6 @@ class FileProcessor:
         files_remaining = self.indexer.total_files_found - files_processed
         if files_remaining < 0:
             files_remaining = 0
-        
         self.callback(f"Directory processed. Files remaining in queue: {files_remaining}")
         
     def process_file(self, metadata):
@@ -809,7 +798,6 @@ class FileProcessor:
                     return
                 else:
                     metadata = metadata_added
-
             image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
 
             if image_type is not None:
@@ -828,7 +816,6 @@ class FileProcessor:
                         processing_time = end_time - start_time
                         self.total_processing_time += processing_time
                         self.files_completed += 1
-                        
                         in_queue = self.indexer.total_files_found - self.files_processed
                         average_time = self.total_processing_time / self.files_completed
                         time_left = average_time * in_queue
@@ -836,7 +823,6 @@ class FileProcessor:
                         if time_left > 180:
                             time_left = time_left / 60
                             time_left_unit = "mins"
-                        
                         self.callback(
                             f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
                         )
@@ -844,7 +830,6 @@ class FileProcessor:
                             f"Processed: {self.files_processed}, In queue: {in_queue}, Time remaining (est): {time_left:.2f}{time_left_unit}"
                         )
                         return
-                        
                     elif metadata.get("status") == "failed":
                         if not self.config.dry_run:
                             self.update_db(metadata)
@@ -858,7 +843,6 @@ class FileProcessor:
                     return
             else:
                 print(f"Not a supported image type: {file_path}")
-
         except Exception as e:
             print(f"Error processing: {file_path}: {str(e)}")
             metadata["status"] = "failed"
@@ -895,11 +879,10 @@ class FileProcessor:
         all_keywords = set()
         if self.config.update_keywords:
             all_keywords.update(metadata.get("Keywords", []))
-
+            
         extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
         if extracted_keywords is None:
             extracted_keywords = self.extract_values(llm_metadata.get("keywords", []))
-
         processed_keywords = set()
 
         # Normalize only the extracted keywords
@@ -932,12 +915,10 @@ class FileProcessor:
             and try again. Another fail gets marked as fail. exiftool helper
             is called at the end to put the metdata in.
         """
-        
         file_path = metadata["SourceFile"]
         
         try:
             llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
-
             if llm_metadata["Keywords"] or llm_metadata["keywords"]:
                 xmp_metadata = {}
                 xmp_metadata["XMP:Description"] = metadata.get("Description")
@@ -960,7 +941,6 @@ class FileProcessor:
                 self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.")
             else:
                 metadata["status"] = "retry"
-             
             return metadata
 
         if self.config.dry_run:
@@ -992,16 +972,13 @@ class FileProcessor:
                     self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.")
                 else:
                     metadata["status"] = "retry"
-                    
                 return metadata
 
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
 
-  
     image_processor = ImageProcessor()
-
     file_processor = FileProcessor(
         config, image_processor, check_paused_or_stopped, callback
     )
@@ -1018,7 +995,6 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
             file_processor.indexer.join()
             print("Indexing completed.")
     else:
-    
         try:
             run_keyword_processing(config, callback, file_processor)
             print("Postprocessing completed.")
