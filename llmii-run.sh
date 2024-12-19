@@ -47,7 +47,7 @@ if [ $? -ne 0 ]; then
 fi
 # Download NLTK data
 echo "Downloading NLTK data..."
-python3 -c import nltk; nltk.download('wordnet')
+python3 -c "import nltk; nltk.download('wordnet')"
 
 # Determine the correct KoboldCPP binary based on the system
 if [[ "$(uname)" == "Darwin" ]]; then
