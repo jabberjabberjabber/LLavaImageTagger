@@ -28,7 +28,7 @@ Before proceeding to use this script you should be aware of the following:
      
 ## Installation
 
-**Qwen2-VL works with the latest version of KoboldCPP but it is not advised to use it at this point. Due to it not using patches and sending the entire image into the LLM processor it ends up taking an extremely long time for some large images. I am working on a fix but due to holidays it may have to wait until after the new year.**
+**Qwen2-VL works with the latest version of KoboldCPP and while KoboldCPP works fine with MiniCPM-V 2.6 (the default, downloaded model) it is not advised to use Qwen2-VL at this point. Due to it not using patches and sending the entire image into the LLM processor it ends up taking an extremely long time for some large images. I am working on a fix but due to holidays it may have to wait until after the new year.**
 
 ### Prerequisites
 
