@@ -65,6 +65,7 @@ Before proceeding to use this script you should be aware of the following:
 
 5. Open a terminal in the LLMImageIndexer folder and run:
    ```
+   xattr -cr koboldcpp-mac-arm64
    chmod +x koboldcpp-mac-arm64
    ./llmii-run.sh
    ```
