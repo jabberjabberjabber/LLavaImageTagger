@@ -22,20 +22,30 @@ LLMImageIndexer is an intelligent image processing and indexing tool that levera
 
 Before proceeding to use this script you should be aware of the following:
 
- - This is a project made by someone completely unfamiliar with the formal protocols used by professional photographers. If you rely on your photography to pay bills, you should extensively test the effects of this script before running it on anything important
- - If directed to write the metadata, it will write to following tags using exiftool: MWG:Keywords, XMP:Description, Status, XMP:Identifier. These are not necessarily the names of the tags that exiftool decides will be used. The exiftool developer is probably the foremost expert on file metadata schema and knows the appropriate place to put the metadata better than I could ever hope to. I did spent a lot of time on making this as 'low impact' as possible while still maintaining the ability to keep track of the state of processed images without a central database or repository of information so that the files can be moved anywhere or renamed without issue, but you need to ensure that your images will not be negatively impacted with the data in those fields
- - This is a fairly technical process. Hopefully everything just works, and I tried to make that the case, but I have limited (re:none) ability to test this on other machines or platforms so any number of bugs can crop up. I will try hard to work with people to resolve issues but you should have the technical skills to troubleshoot and follow directions. If you cannot do that, you should proceed with hesitation.
+This tool operates directly on image file metadata. When 'pretend mode' is not checked it will write to one or more of the following fields:
+
+- MWG:Keywords, which may write to any of the following fields:
+  1. DC:Subject
+  2. IPTC: Keywords
+  3. Composite: Keywords
+  
+- XMP: Description, for caption
+- XMP: Status, for processing state
+- XMP:Identifier, for unique identifier
+
+The "Status" and "Identifier" fields are used to track the processing state of images so that a database is not needed. The images may be moved between directories or even renamed, and if the "Skip images already processed but not in database" box is checked, they will not be processed again. 
+
+**This means you can manage your files and add new files, and run the tool as many times as you like without worrying about reprocessing the files that were previously keyworded by the tool.**
+
      
 ## Installation
-
-**Qwen2-VL works with the latest version of KoboldCPP and while KoboldCPP works fine with MiniCPM-V 2.6 (the default, downloaded model) it is not advised to use Qwen2-VL at this point. Due to it not using patches and sending the entire image into the LLM processor it ends up taking an extremely long time for some large images. I am working on a fix but due to holidays it may have to wait until after the new year.**
 
 ### Prerequisites
 
 - Python 3.8 or higher
 - KoboldCPP
 
-**A vision model is needed, but if you use the llmii-run.bat to open it, then the first time it is run it will download the MiniCPM-V 2.6 Q4_K_M gguf and F16 projector from Bartowski's repo on huggingface. If you don't want to use that, just open llmii-no-kobold.bat instead and open Koboldcpp.exe and load whatever model you like.**
+**A vision model is needed, but if you use the llmii-run.bat to open it, then the first time it is run it will download the Qwen2-VL 7B Q4_K_M gguf and F16 projector from Bartowski's repo on huggingface. If you don't want to use that, just open llmii-no-kobold.bat instead and open Koboldcpp.exe and load whatever model you like.**
   
 ### Windows Installation
 
