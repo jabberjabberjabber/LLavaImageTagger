@@ -45,10 +45,18 @@ if [ $? -ne 0 ]; then
     echo "Failed to install some packages. Please check your internet connection and requirements.txt file."
     exit 1
 fi
+
 # Download NLTK data
 echo "Downloading NLTK data..."
 python3 -c "import nltk; nltk.download('wordnet')"
 
+# Clear screen
+clear
+
+TEXT_MODEL="https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/Qwen2-VL-7B-Instruct-Q4_K_M.gguf"
+IMAGE_PROJECTOR="https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/mmproj-Qwen2-VL-7B-Instruct-f16.gguf"
+
+       
 # Determine the correct KoboldCPP binary based on the system
 if [[ "$(uname)" == "Darwin" ]]; then
     if [[ "$(uname -m)" == "arm64" ]]; then
@@ -69,14 +77,9 @@ if [ ! -x "$KOBOLDCPP_BINARY" ]; then
     exit 1
 fi
 
-# Launch KoboldCPP
-"$KOBOLDCPP_BINARY" --config llmii.kcppt &
-
-# Wait for KoboldCPP to start
-echo "Waiting for KoboldCPP to start..."
-while ! nc -z localhost 5001; do   
-  sleep 1
-done
+# Launch KoboldCPP with selected model if a model was chosen
+if [ "$MODEL_CHOICE" != "4" ]; then
+    "$KOBOLDCPP_BINARY" "$TEXT_MODEL" --mmproj "$IMAGE_PROJECTOR" --flashattention --contextsize 4096 &
 
 # Launch the Python GUI script
 python3 llmii-gui.py

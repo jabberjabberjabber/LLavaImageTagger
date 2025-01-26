@@ -3,9 +3,34 @@ import os
 import llmii
 from PyQt6.QtCore import QThread, pyqtSignal, QObject, Qt
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog, 
-                             QTextEdit, QGroupBox, QSpinBox, QRadioButton, QButtonGroup,
-                             QProgressBar, QTableWidget, QTableWidgetItem, QComboBox)
+                           QLabel, QLineEdit, QCheckBox, QPushButton, QFileDialog, 
+                           QTextEdit, QGroupBox, QSpinBox, QRadioButton, QButtonGroup,
+                           QProgressBar, QTableWidget, QTableWidgetItem, QComboBox,
+                           QPlainTextEdit, QScrollArea, QMessageBox)
+from koboldapi import KoboldAPI
+
+class APICheckThread(QThread):
+    api_status = pyqtSignal(bool)
+    
+    def __init__(self, api_url):
+        super().__init__()
+        self.api_url = api_url
+        self.running = True
+        
+    def run(self):
+        while self.running:
+            try:
+                api = KoboldAPI(self.api_url)
+                version = api.get_version()
+                if version:
+                    self.api_status.emit(True)
+                    break
+            except:
+                self.api_status.emit(False)
+            self.msleep(1000)  # Check every second
+            
+    def stop(self):
+        self.running = False
 
 class IndexerThread(QThread):
     output_received = pyqtSignal(str)
@@ -28,7 +53,6 @@ class IndexerThread(QThread):
         if self.paused:
             while self.paused and not self.stopped:
                 self.msleep(100)
-            # After unpausing, check again if we've been stopped
             if self.stopped:
                 raise Exception("Indexer stopped by user")
         return self.paused
@@ -36,7 +60,6 @@ class IndexerThread(QThread):
 class PauseHandler(QObject):
     pause_signal = pyqtSignal(bool)
     stop_signal = pyqtSignal()
-
 
 class ImageIndexerGUI(QMainWindow):
     def __init__(self):
@@ -67,22 +90,56 @@ class ImageIndexerGUI(QMainWindow):
         api_layout.addWidget(QLabel("API Password:"))
         api_layout.addWidget(self.api_password_input)
         layout.addLayout(api_layout)
+
+        # Add API status indicator
+        self.api_status_label = QLabel("API Status: Checking...")
+        layout.addWidget(self.api_status_label)
         
-        # Caption Instruction
         caption_instruction_layout = QVBoxLayout()
-        self.caption_instruction_input = QLineEdit("Describe the image in detail. Be specific.")
-        caption_instruction_layout.addWidget(QLabel("Caption Instruction:"))
-        caption_instruction_layout.addWidget(self.caption_instruction_input)
+        caption_group = QGroupBox("Caption Settings")
+        caption_inner_layout = QVBoxLayout()
+        
+        self.caption_instruction_input = QPlainTextEdit()
+        self.caption_instruction_input.setPlainText("Describe the image in detail. Be specific.")
+        self.caption_instruction_input.setMaximumHeight(100)
+        
+        caption_label = QLabel("Caption Instruction:")
+        caption_inner_layout.addWidget(caption_label)
+        caption_inner_layout.addWidget(self.caption_instruction_input)
+        
         self.write_caption_checkbox = QCheckBox("Write a caption and place in XMP:Description")
-        caption_instruction_layout.addWidget(self.write_caption_checkbox)
+        caption_inner_layout.addWidget(self.write_caption_checkbox)
+        
+        caption_group.setLayout(caption_inner_layout)
+        caption_instruction_layout.addWidget(caption_group)
         layout.addLayout(caption_instruction_layout)
         
-        # Instruction
+        # Replace Instruction section
+        instruction_group = QGroupBox("Keyword Generation Instructions")
         instruction_layout = QVBoxLayout()
-        self.instruction_input = QLineEdit("Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:\n1. Main subject of the image\n2. Physical appearance and clothing, gender, age, professions and relationships\n3. Actions or state of the main elements\n4. Setting or location, environment, or background\n5. Notable items, structures, or elements\n6. Colors and textures, patterns, or lighting\n7. Atmosphere and mood, time of day, season, or weather\n8. Composition and perspective, framing, or style of the photo.\n9. Any other relevant keywords.\nProvide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {\"Keywords\": []}")
+        
+        self.instruction_input = QPlainTextEdit()
+        default_instruction = """Generate at least 14 unique one or two word IPTC Keywords for the image. Cover the following categories as applicable:
+1. Main subject of the image
+2. Physical appearance and clothing, gender, age, professions and relationships
+3. Actions or state of the main elements
+4. Setting or location, environment, or background
+5. Notable items, structures, or elements
+6. Colors and textures, patterns, or lighting
+7. Atmosphere and mood, time of day, season, or weather
+8. Composition and perspective, framing, or style of the photo.
+9. Any other relevant keywords
+
+Provide one or two words. Do not combine words. Generate ONLY a JSON object with the key Keywords with a single list of keywords as follows {"Keywords": []}"""
+        
+        self.instruction_input.setPlainText(default_instruction)
+        self.instruction_input.setMinimumHeight(200)
+        
         instruction_layout.addWidget(QLabel("Instruction:"))
         instruction_layout.addWidget(self.instruction_input)
-        layout.addLayout(instruction_layout)
+        
+        instruction_group.setLayout(instruction_layout)
+        layout.addWidget(instruction_group)
 
         # GenTokens
         gen_count_layout = QHBoxLayout()
@@ -136,7 +193,7 @@ class ImageIndexerGUI(QMainWindow):
         )
         example_label = QLabel(example_text)
         example_label.setWordWrap(True)
-        example_label.setTextFormat(Qt.TextFormat.RichText)  # Enable rich text interpretation
+        example_label.setTextFormat(Qt.TextFormat.RichText)
         keyword_processing_layout.addWidget(example_label)
                 
         options_layout.addLayout(keyword_processing_layout)
@@ -152,11 +209,9 @@ class ImageIndexerGUI(QMainWindow):
         self.overwrite_keywords_radio = QRadioButton("Clear existing keywords and write new ones")
         self.update_keywords_radio = QRadioButton("Add to existing keywords")
         
-        #self.keywords_radio_group.addButton(self.no_keywords_radio)
         self.keywords_radio_group.addButton(self.overwrite_keywords_radio)
         self.keywords_radio_group.addButton(self.update_keywords_radio)
         
-        #keywords_layout.addWidget(self.no_keywords_radio)
         keywords_layout.addWidget(self.overwrite_keywords_radio)
         keywords_layout.addWidget(self.update_keywords_radio)
         
@@ -164,7 +219,6 @@ class ImageIndexerGUI(QMainWindow):
         self.update_keywords_radio.setChecked(True)
         self.skip_orphans_checkbox.setChecked(True)
         
-        #keywords_layout.addLayout(gen_count_layout)
         xmp_layout.addLayout(keywords_layout)
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
@@ -191,6 +245,49 @@ class ImageIndexerGUI(QMainWindow):
         layout.addWidget(self.output_area)
 
         self.pause_handler = PauseHandler()
+        
+        # Initialize API check thread
+        self.api_check_thread = None
+        self.api_is_ready = False
+        
+        # Disable Run button initially
+        self.run_button.setEnabled(False)
+        
+        # Start checking API when URL changes
+        self.api_url_input.textChanged.connect(self.start_api_check)
+        
+        # Start initial API check
+        self.start_api_check()
+
+    def start_api_check(self):
+        if self.api_check_thread and self.api_check_thread.isRunning():
+            self.api_check_thread.stop()
+            self.api_check_thread.wait()
+            
+        self.api_is_ready = False
+        self.run_button.setEnabled(False)
+        self.api_status_label.setText("API Status: Checking...")
+        self.api_status_label.setStyleSheet("color: orange")
+        
+        self.api_check_thread = APICheckThread(self.api_url_input.text())
+        self.api_check_thread.api_status.connect(self.update_api_status)
+        self.api_check_thread.start()
+
+    def update_api_status(self, is_available):
+        if is_available:
+            self.api_is_ready = True
+            self.api_status_label.setText("API Status: Connected")
+            self.api_status_label.setStyleSheet("color: green")
+            self.run_button.setEnabled(True)
+            
+            # Stop the check thread once we're connected
+            if self.api_check_thread:
+                self.api_check_thread.stop()
+        else:
+            self.api_is_ready = False
+            self.api_status_label.setText("API Status: Waiting for connection...")
+            self.api_status_label.setStyleSheet("color: red")
+            self.run_button.setEnabled(False)
 
     def select_directory(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Directory")
@@ -198,6 +295,11 @@ class ImageIndexerGUI(QMainWindow):
             self.dir_input.setText(directory)
 
     def run_indexer(self):
+        if not self.api_is_ready:
+            QMessageBox.warning(self, "API Not Ready", 
+                              "Please wait for the API to be available before running the indexer.")
+            return
+            
         config = llmii.Config()
         config.directory = self.dir_input.text()
         config.api_url = self.api_url_input.text()
@@ -210,7 +312,8 @@ class ImageIndexerGUI(QMainWindow):
         config.no_backup = self.no_backup_checkbox.isChecked()
         config.write_caption = self.write_caption_checkbox.isChecked()
         config.dry_run = self.dry_run_checkbox.isChecked()
-        config.instruction = self.instruction_input.text()
+        config.instruction = self.instruction_input.toPlainText()
+        config.caption_instruction = self.caption_instruction_input.toPlainText()
         if self.overwrite_keywords_radio.isChecked():
             config.overwrite_keywords = True
             config.update_keywords = False
@@ -270,6 +373,13 @@ class ImageIndexerGUI(QMainWindow):
         self.output_area.append(text)
         self.output_area.verticalScrollBar().setValue(self.output_area.verticalScrollBar().maximum())
         QApplication.processEvents()
+        
+    def closeEvent(self, event):
+        # Clean up API check thread when closing the window
+        if self.api_check_thread and self.api_check_thread.isRunning():
+            self.api_check_thread.stop()
+            self.api_check_thread.wait()
+        event.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

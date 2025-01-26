@@ -70,6 +70,12 @@ if errorlevel 1 (
 REM Download NLTK data
 echo Downloading NLTK data...
 python -c "import nltk; nltk.download('wordnet')"
+cls
+
+
+set "TEXT_MODEL=https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/Qwen2-VL-7B-Instruct-Q4_K_M.gguf"
+set "IMAGE_PROJECTOR=https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/mmproj-Qwen2-VL-7B-Instruct-f16.gguf"
+
 
 REM Check if koboldcpp.exe exists, if not, check for koboldcpp_cu12.exe
 if exist koboldcpp.exe (
@@ -82,9 +88,11 @@ if exist koboldcpp.exe (
     exit /b 1
 )
 
-REM Launch your Python script
-start %KOBOLD_EXE% --config llmii.kcppt
+REM Launch KoboldCPP with selected model
+start %KOBOLD_EXE% %TEXT_MODEL% --mmproj %IMAGE_PROJECTOR% --flashattention --contextsize 4096
 
+:Load
+REM Launch your Python script
 python llmii-gui.py
 pause
 

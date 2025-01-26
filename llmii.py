@@ -1,11 +1,13 @@
-import os, json, time, re, argparse, exiftool, requests, base64, threading, queue, calendar, io, random, rawpy, uuid
-from pillow_heif import register_heif_opener
+import os, json, time, re, argparse, exiftool, threading, queue, calendar, io, uuid
+
 from PIL import Image
 from tinydb import TinyDB, where, Query
 from json_repair import repair_json as rj
 from datetime import timedelta
 from fix_busted_json import first_json
 from keyword_processor import KeywordProcessor
+
+from koboldapi import KoboldAPICore, ImageProcessor
 
 def run_keyword_processing(config, callback, file_processor):
     if config.keyword_processing in ["expand", "dedupe"]:
@@ -24,42 +26,91 @@ def run_keyword_processing(config, callback, file_processor):
     else:
         callback("Keyword processing skipped (set to 'keep').")
 
-def normalize_keyword(keyword, banned_words, replaced_words):
-    """ Prevents bad keywords by banning regularly malformed 
-        sequences or words indicative of bad generations
+def split_on_internal_capital(word):
+    """ Split a word if it contains a capital letter after the 4th position.
+        Returns the original word if no split is needed, or the split 
+        version if a capital is found.
+        
+        Examples:
+            BlueSky -> Blue Sky
+            microService -> micro Service
     """
-    keyword = str(keyword).lower().strip()
+    if len(word) <= 4:
+        return word
+        
+    for i in range(4, len(word)):
+        if word[i].isupper():
+            return word[:i] + " " + word[i:]
+            
+    return word
+
+def normalize_keyword(keyword, banned_words, replaced_words):
+    """ Normalizes keywords according to specific rules:
+        1. Splits unhyphenated compound words on internal capitals
+        2. Max 2 words unless middle word is 'and'/'or' (then max 3)
+        3. Hyphens between alphanumeric chars count as two words
+        4. Cannot start with 3+ digits
+        5. Each word must be 2+ chars
+        6. Removes all non-alphanumeric except spaces and valid hyphens
+        7. Checks against banned words
+        8. Returns lowercase result
+    """
+    if not isinstance(keyword, str):
+        keyword = str(keyword)
     
-    # Replace underscores with spaces
-    keyword = re.sub(r"[_]+", " ", keyword)
+    # Handle internal capitalization before lowercase conversion
+    words = keyword.strip().split()
+    split_words = []
+    for word in words:
+        split_words.extend(split_on_internal_capital(word).split())
+    keyword = " ".join(split_words)
     
-    # Remove any other non-alphanumeric characters
-    keyword = re.sub(r"[^\w\s-]", "", keyword)
+    # Convert to lowercase after handling capitals
+    keyword = keyword.lower().strip()
     
-    # Replace multiple spaces with a single space
-    keyword = re.sub(r"\s+", " ", keyword)
+    # Remove all non-alphanumeric chars except spaces and hyphens
+    keyword = re.sub(r'[^\w\s-]', '', keyword)
     
-    if keyword.startswith(""):
-        return keyword
+    # Replace multiple spaces/hyphens with single space/hyphen
+    keyword = re.sub(r'\s+', ' ', keyword)
+    keyword = re.sub(r'-+', '-', keyword)
     
-    words = keyword.split()
-    if len(words[0]) < 2:
+    # For validation, we'll track both original tokens and split words
+    tokens = keyword.split()
+    words = []
+    
+    # Validate and collect words for length checking
+    for token in tokens:
+        # Handle hyphenated words
+        if '-' in token:
+            # Check if hyphen is between alphanumeric chars
+            if not re.match(r'^[\w]+-[\w]+$', token):
+                return None
+            # Add hyphenated parts to words list for validation
+            parts = token.split('-')
+            words.extend(parts)
+        else:
+            words.append(token)
+    
+    # Validate word count
+    if len(words) > 3 or (len(words) == 3 and words[1] not in ['and', 'or']):
+        return None
+    
+    # Validate each word
+    for word in words:
+        # Check minimum length
+        if len(word) < 2:
+            return None
+        # Check for banned words
+        if word in banned_words:
+            return None
+    
+    # Check if starts with 3+ digits
+    if re.match(r'^\d{3,}', words[0]):
         return None
         
-    # Cannot start with more than two digits
-    if re.match(r"^\d{3,}", words[0]):
-        return None
-    
-    # Two word max unless middle word is 'and'
-    if len(words) > 2 and words[1] not in ['and', 'or']:
-        keyword = ' '.join(words[:2])
-    else:
-        keyword = ' '.join(words[:3])
-    
-    if re.match(r"^\d{5,}", keyword) or words[0] in banned_words:
-        return None
-    
-    return keyword
+    # Return the original tokens (preserving hyphens)
+    return ' '.join(tokens)
     
 def clean_string(data):
     if isinstance(data, dict):
@@ -148,21 +199,29 @@ def clean_json(data):
         data = re.sub(r'["""]', '"', data)
         try:
             return json.loads(rj(data))
-                
+        except:
+            pass
+        try:
             # first_json will return the first json found in a string
             # rj tries to repair json using some heuristics
             return json.loads(first_json(rj(data)))
-            
+        except:
+            pass    
+        try:    
             # Is it a markdown list?
             if result := markdown_list_to_dict(data):
                 return result
-            
+        except:
+            pass
+        try:    
             # The nuclear option - wrap whatever it is around brackets and load it
             # Hopefully normalize_keywords will take care of any garbage
             result = json.loads(first_json(rj("{" + data + "}")))
             if result.get("Keywords"):
                 return result
-            
+        except:
+            pass
+        try:    
             return find_keywords(copied_data)           
         except:
             print(f"Failed to parse JSON: {data}")          
@@ -247,178 +306,24 @@ class Config:
             setattr(config, key, value)
         return config
 
-
-class ImageProcessor:
-    def __init__(self):
-        # For HEIC support 
-        register_heif_opener()
-
-    def route_image(self, file_path, image_type):
-        """ Checks RAW for embedded JPEG and uses that, 
-            if not converts it to JPG. JPG, PNG
-            get sent as-is, all others get turned into
-            JPGs. Everything is encoded in base64
-            to get sent to the LLM
-        """
-        try:
-            if image_type == "RAW":
-                return self.process_raw_image(file_path)
-            elif image_type in ["JPEG", "BMP", "PNG"]:
-                return self.encode_file_to_base64(file_path)
-            else:
-                return self.process_image(file_path)
-
-        except Exception as e:
-            self.logger.error(f"Image unsupported {file_path}: {str(e)}")
-        return None
-
-    def encode_file_to_base64(self, file_path):
-        with open(file_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode("utf-8")
-
-    def process_image(self, file_path):
-        try:
-            with Image.open(file_path) as img:
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-
-                buffer = io.BytesIO()
-                img.save(buffer, format="JPEG", quality=95)
-                data = buffer.getvalue()
-
-                return base64.b64encode(data).decode("utf-8")
-        except Exception as e:
-            print(f"Error processing {file_path}: {str(e)}")
-        return None
-
-    def process_raw_image(self, file_path):
-        with rawpy.imread(file_path) as raw:
-            try:
-                thumb = raw.extract_thumb()
-                if thumb.format == rawpy.ThumbFormat.JPEG:
-                    return base64.b64encode(thumb.data).decode("utf-8")
-            except:
-                pass
-            rgb = raw.postprocess()
-            img = Image.fromarray(rgb)
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=95)
-            return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-
 class LLMProcessor:
     def __init__(self, config):
         self.config = config
-        self.api_function_urls = {
-            "tokencount": "/api/extra/tokencount",
-            "interrogate": "/api/v1/generate",
-            "max_context_length": "/api/extra/true_max_context_length",
-            "check": "/api/generate/check",
-            "abort": "/api/extra/abort",
-            "version": "/api/extra/version",
-            "model": "/api/v1/model",
-            "generate": "/api/v1/generate",
-        }
-
         self.instruction = config.instruction
-        self.api_url = config.api_url
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_password}",
+        config_dict = {
+            "max_length": config.gen_count,
+            "top_p": 1,
+            "top_k": 0,
+            "temp": 0,
+            "rep_pen": 1,
+            "min_p": 0,
         }
-        self.genkey = self._create_genkey()
         self.caption_instruction = config.caption_instruction
-        # you may have to add an entry name for a finetune with
-        # a different name than its base
-        self.templates = {
-            1: {
-                "name": ["Alpaca"],
-                "user": "\n\n### Instruction:\n\n",
-                "assistant": "\n\n### Response:\n\n",
-                "system": None,
-            },
-            2: {
-                "name": ["Vicuna", "Wizard", "ShareGPT"],
-                "user": "### Human: ",
-                "assistant": "\n### Assistant: ",
-                "system": None,
-            },
-            3: {
-                "name": ["Llama 2", "Llama2", "Llamav2"],
-                "user": " [/INST][INST] ",
-                "assistant": " [/INST]",
-                "system": None,
-            },
-            4: {
-                "name": ["Llama 3", "Llama3", "Llama-3"],
-                "endTurn": "<|eot_id|>\n",
-                "system": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n",
-                "system": None,
-                "user": "<|start_header_id|>user<|end_header_id|>\n\n",
-                "assistant": "<|start_header_id|>assistant<|end_header_id|>\n\n",
-            },
-            5: {
-                "name": ["Phi-3"],
-                "user": "<|end|><|user|>\n",
-                "assistant": "<end_of_turn><|end|><|assistant|>\n",
-                "system": None,
-            },
-            6: {
-                "name": ["Mistral", "bakllava"],
-                "user": "[INST] ",
-                "assistant": " [/INST]",
-                "system": None,
-            },
-            7: {
-                "name": ["Yi"],
-                "user": "<|user|>",
-                "assistant": "<|assistant|>",
-                "system": None,
-            },
-            8: {
-                "name": ["ChatML", "obsidian", "Nous", "Hermes", "cpm", "Qwen", "Josie"],
-                "user": "<|im_end|>\n<|im_start|>user\n",
-                "assistant": "<|im_end|>\n<|im_start|>assistant\n",
-                "system": "<|im_start|>system\n",
-            },
-            9: {
-                "name": ["WizardLM"],
-                "user": "input:\n",
-                "assistant": "output\n",
-                "system": None,
-            },
-        }
-        self.model = self._get_model()
-        self.max_context = self._get_max_context_length()
+        self.core = KoboldAPICore(config.api_url, config.api_password, config_dict)
+        self.image_processor = ImageProcessor(max_dimension=1024)
 
-    def _call_api(self, api_function, payload=None):
-        """ The part where we talk to koboldAPI. Open the browser
-            and go to http://localhost:5001/api to see all the options.
-        """
-        if api_function not in self.api_function_urls:
-            raise ValueError(f"Invalid API function: {api_function}")
-        url = f"{self.api_url}{self.api_function_urls[api_function]}"
-
-        try:
-            # Some API calls are POSTs and some are GETs
-            if api_function in ["tokencount", "generate", "check", "interrogate"]:
-                response = requests.post(url, json=payload, headers=self.headers)
-                result = response.json()
-                if api_function == "tokencount":
-                    return int(result.get("value"))
-                else:
-                    return result["results"][0].get("text")
-            else:
-                response = requests.get(url, json=payload, headers=self.headers)
-                result = response.json()
-                return result.get("result", None)
-        except requests.RequestException as e:
-            print(f"Error calling API: {str(e)}")
-            return None
-
-    def describe_content(self, base64_image, task="keywords"):
-        """ Samplers should not be used but Kobold sets some by default 
-            if they aren't specified
+    def describe_content(self, file_path, task="keywords"):
+        """ 
         """
         if task == "keywords":
             instruction = self.instruction
@@ -427,91 +332,9 @@ class LLMProcessor:
         else:
             print(f"Invalid task {task}")
             return None
-        prompt = self.get_prompt(instruction)
-        payload = {
-            "prompt": prompt,
-            "max_length": self.config.gen_count,
-            "images": [base64_image],
-            "genkey": self.genkey,
-            "top_p": 1,
-            "top_k": 0,
-            "temp": 0,
-            "rep_pen": 1,
-            "min_p": 0,
-        }
-        return self._call_api("generate", payload)
-
-    def _get_model(self):
-        """ Calls koboldAPI and asks for the name of the running model.
-            Then tries to match a string in the returned text with
-            one of the prompt templates. It then loads the template
-            into the model dict.
-        """
-        if self.config.text_completion:
-            return { "name": ["Completion"],
-                "user": "",
-                "assistant": "",
-                "system": None,
-            }
-        model_name = self._call_api("model")
-        if not model_name:
-            return None
-
-        def normalize(s):
-            return re.sub(r"[^a-z0-9]", "", s.lower())
-        normalized_model_name = normalize(model_name.lower())
-        def check_match(template_name):
-            if isinstance(template_name, list):
-                return any(
-                    normalize(name) in normalized_model_name for name in template_name
-                )
-            return normalize(template_name) in normalized_model_name
-        matched_template = max(
-            (
-                (
-                    template,
-                    len(
-                        normalize(
-                            template["name"]
-                            if isinstance(template["name"], str)
-                            else template["name"][0]
-                        )
-                    ),
-                )
-                for template in self.templates.values()
-                if check_match(template["name"])
-            ),
-            key=lambda x: x[1],
-            default=(None, 0),
-        )[0]
-        return matched_template if matched_template else self.templates[1]
-
-    def get_prompt(self, instruction="", content=""):
-        """ Uses the instruct templates to create a prompt with the proper
-            start and end sequences. If the model name does not contain
-            the name of the model it was based on, these may be incorrect.
-        """              
-        user_part = self.model["user"]
-        assistant_part = self.model["assistant"]
-        end_part = self.model.get("endTurn", "")
-        if system_part := self.model.get("system"):
-            return f"{system_part}{self.config.system_instruction}{end_part}{user_part}{instruction}{content}{end_part}{assistant_part}"
-        else:
-            return f"{user_part}{instruction}{content}{end_part}{assistant_part}"
         
-    @staticmethod
-    def _create_genkey():
-        """ Prevents kobold from returning your generation to another
-            query.
-        """
-        return f"KCPP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
-
-    def _get_max_context_length(self):
-        return self._call_api("max_context_length")
-
-    def _get_token_count(self, content):
-        payload = {"prompt": content, "genkey": self.genkey}
-        return self._call_api("tokencount", payload)
+        encoded_image, path = self.image_processor.process_image(file_path)
+        return self.core.wrap_and_generate(instruction=instruction, images=[encoded_image])
 
 class BackgroundIndexer(threading.Thread):
     def __init__(self, root_dir, metadata_queue, file_extensions, no_crawl=False):
@@ -543,9 +366,8 @@ class BackgroundIndexer(threading.Thread):
             self.metadata_queue.put((directory, files))
             
 class FileProcessor:
-    def __init__(self, config, image_processor, check_paused_or_stopped, callback):
+    def __init__(self, config, check_paused_or_stopped, callback):
         self.config = config
-        self.image_processor = image_processor
         self.llm_processor = LLMProcessor(config)
         self.check_paused_or_stopped = check_paused_or_stopped
         self.callback = callback
@@ -568,6 +390,9 @@ class FileProcessor:
         self.exiftool_fields = [
             "MWG:Keywords",
             "XMP:Identifier",
+            "IPTC:Keywords",
+            "Subject",
+            "Keywords"
         ]
 
         # untested formats:
@@ -730,7 +555,7 @@ class FileProcessor:
                 f"Added folder {directory} to queue containing {len(files)} image files."
             )
         return files
-
+                
     def process_directory(self, directory):
         while not (self.indexer.indexing_complete and self.metadata_queue.empty()):
             if self.check_pause_stop():
@@ -749,7 +574,9 @@ class FileProcessor:
                         if metadata.get("Subject"):
                             keywords += metadata.get("Subject")
                         if metadata.get("IPTC:Keywords"):
-                            keywords += metadata.get("IPTC:Keywords")                            
+                            keywords += metadata.get("IPTC:Keywords")
+                        if metadata.get("MWG:Keywords"):
+                            keywords += metadata.get("MWG:Keywords")                            
                         if keywords:
                             metadata["Keywords"] = keywords
                         self.process_file(metadata)
@@ -760,7 +587,7 @@ class FileProcessor:
                 
             except queue.Empty:
                 continue
-                
+
     def _get_metadata_batch(self, files):
         with exiftool.ExifToolHelper(check_execute=False) as et:  
             return et.get_tags(files, tags=self.exiftool_fields)         
@@ -802,45 +629,50 @@ class FileProcessor:
 
             if image_type is not None:
                 start_time = time.time()
-                # Send image encoded in base64 to be processed by LLM
-                image_object_or_path = self.image_processor.route_image(file_path, image_type)
-                if image_object_or_path:
-                    if self.config.write_caption:
-                        caption = self.write_caption(image_object_or_path)
-                        if caption:
-                            metadata["Description"] = caption
-                    metadata = self.update_metadata(metadata, image_object_or_path)
-                    
-                    if metadata.get("status") == "success":    
-                        end_time = time.time()
-                        processing_time = end_time - start_time
-                        self.total_processing_time += processing_time
-                        self.files_completed += 1
-                        in_queue = self.indexer.total_files_found - self.files_processed
-                        average_time = self.total_processing_time / self.files_completed
-                        time_left = average_time * in_queue
-                        time_left_unit = "s"
-                        if time_left > 180:
-                            time_left = time_left / 60
-                            time_left_unit = "mins"
-                        self.callback(
-                            f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
+                if self.config.write_caption:
+                    caption = clean_string(
+                        self.llm_processor.describe_content(
+                            file_path, task="caption"
                         )
-                        self.callback(
-                            f"Processed: {self.files_processed}, In queue: {in_queue}, Time remaining (est): {time_left:.2f}{time_left_unit}"
-                        )
-                        return
-                    elif metadata.get("status") == "failed":
-                        if not self.config.dry_run:
-                            self.update_db(metadata)
-                        return
-                    elif metadata.get("status") == "retry":
-                        self.process_file(metadata)
-                    else:
-                        print(f"Error processing file: {file_path}")
-                        return
-                if self.check_pause_stop():
+                    )
+                    if caption:
+                        metadata["Description"] = caption
+                metadata = self.update_metadata(metadata, file_path)
+                
+                if metadata.get("status") == "success":    
+                    end_time = time.time()
+                    processing_time = end_time - start_time
+                    self.total_processing_time += processing_time
+                    self.files_completed += 1
+                    in_queue = self.indexer.total_files_found - self.files_processed
+                    average_time = self.total_processing_time / self.files_completed
+                    time_left = average_time * in_queue
+                    time_left_unit = "s"
+                    if time_left > 180:
+                        time_left = time_left / 60
+                        time_left_unit = "mins"
+                    if time_left < 0:
+                        time_left = 0
+                    if in_queue < 0:
+                        in_queue = 0
+                    self.callback(
+                        f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
+                    )
+                    self.callback(
+                        f"Processed: {self.files_processed}, In queue: {in_queue}, Time remaining (est): {time_left:.2f}{time_left_unit}"
+                    )
                     return
+                elif metadata.get("status") == "failed":
+                    if not self.config.dry_run:
+                        self.update_db(metadata)
+                    return
+                elif metadata.get("status") == "retry":
+                    self.process_file(metadata)
+                else:
+                    print(f"Error processing file: {file_path}")
+                    return
+                if self.check_pause_stop():
+                        return
             else:
                 print(f"Not a supported image type: {file_path}")
         except Exception as e:
@@ -877,37 +709,35 @@ class FileProcessor:
             Only extracted keywords are normalized, the rest are added to the set as-is.
         """
         all_keywords = set()
+        
+        # Handle existing keywords if updating
         if self.config.update_keywords:
-            all_keywords.update(metadata.get("Keywords", []))
-            
+            existing_keywords = metadata.get("Keywords", [])
+            # Handle case where Keywords is a string instead of list
+            if isinstance(existing_keywords, str):
+                existing_keywords = [existing_keywords]
+            elif not isinstance(existing_keywords, list):
+                existing_keywords = []
+                
+            for keyword in existing_keywords:
+                if keyword:  # Skip empty strings
+                    all_keywords.add(keyword)
+                    
+        # Process new keywords from LLM
         extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
-        if extracted_keywords is None:
-            extracted_keywords = self.extract_values(llm_metadata.get("keywords", []))
-        processed_keywords = set()
-
-        # Normalize only the extracted keywords
-        for keyword in extracted_keywords:
-            normalized = normalize_keyword(keyword, self.banned_words, self.replaced_words)
-            if normalized:
-                processed_keywords.add(normalized)
-
-        # Add the rest of the keywords without normalization
-        processed_keywords.update(all_keywords)
-
-        if processed_keywords:        
-            return list(processed_keywords)
+        if extracted_keywords:
+            # Normalize only the extracted keywords
+            for keyword in extracted_keywords:
+                normalized = normalize_keyword(keyword, self.banned_words, self.replaced_words)
+                if normalized:
+                    all_keywords.add(normalized)
+       
+        if all_keywords:        
+            return list(all_keywords)
         else:
             return None
     
-    def write_caption(self, base64_image):
-        task = "caption"
-        caption = ""
-        try:
-            return clean_string(self.llm_processor.describe_content(base64_image, task))
-        except:
-            return 
-        
-    def update_metadata(self, metadata, base64_image):
+    def update_metadata(self, metadata, file_path):
         """ The meat and potatoes. It should be pretty easy to follow.
             First query the LLM, fix the inevitably malformed JSON,
             check to see if there is a dict with value Keywords. Put them
@@ -918,9 +748,14 @@ class FileProcessor:
         file_path = metadata["SourceFile"]
         
         try:
-            llm_metadata = clean_json(self.llm_processor.describe_content(base64_image))
+            llm_metadata = clean_json(self.llm_processor.describe_content(file_path, task="keywords"))
             if llm_metadata["Keywords"] or llm_metadata["keywords"]:
-                xmp_metadata = {}
+                xmp_metadata = {
+                    #"Subject": "",
+                    #"Keywords": "",
+                    #"IPTC:Keywords": "",
+                    #"MWG:Keywords": ""
+                }
                 xmp_metadata["XMP:Description"] = metadata.get("Description")
                 xmp_metadata["XMP:Identifier"] = metadata.get(
                     "XMP:Identifier", str(uuid.uuid4())
@@ -935,7 +770,7 @@ class FileProcessor:
                 if xmp_metadata.get("XMP:Description"):
                     output +=  (f"\nCaption: {xmp_metadata.get('XMP:Description')}")
         except:
-            print(f"CANNOT parse keywords for {file_path}")
+            print(f"Cannot parse LLM output for {file_path}.")
             if metadata.get("status") == "retry" or metadata.get("status") == "failed":
                 metadata["status"] = "failed"
                 self.callback(f"\n---\nCANNOT parse keywords for {file_path}; it has been retried and is marked failed.")
@@ -978,9 +813,8 @@ def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
 
-    image_processor = ImageProcessor()
     file_processor = FileProcessor(
-        config, image_processor, check_paused_or_stopped, callback
+        config, check_paused_or_stopped, callback
     )
     if config.skip_processing is False:      
         try:
