@@ -1,11 +1,7 @@
-numpy==1.26.4
-requests
 pyqt6
-pillow
-rawpy
 tinydb
 json_repair
-pillow-heif
 uuid
 pyexiftool==0.5.6
+koboldapi
 nltk==3.8.1
