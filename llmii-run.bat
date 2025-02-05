@@ -22,7 +22,8 @@ if errorlevel 1 (
     winget install -e --id OliverBetz.ExifTool
     if errorlevel 1 (
         echo Failed to install exiftool. Please install it manually.
-        pause
+        echo Installer can be found here: https://oliverbetz.de/pages/Artikel/ExifTool-for-Windows
+		pause
         exit /b 1
     )
     echo exiftool has been installed. Please restart this script for the changes to take effect.
@@ -66,16 +67,10 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-
-REM Download NLTK data
-echo Downloading NLTK data...
-python -c "import nltk; nltk.download('wordnet')"
 cls
 
-
-set "TEXT_MODEL=https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/Qwen2-VL-7B-Instruct-Q4_K_M.gguf"
-set "IMAGE_PROJECTOR=https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/mmproj-Qwen2-VL-7B-Instruct-f16.gguf"
-
+set "TEXT_MODEL=https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/blob/main/Qwen2-VL-2B-Instruct-Q6_K.gguf"
+set "IMAGE_PROJECTOR=https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/blob/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf"
 
 REM Check if koboldcpp.exe exists, if not, check for koboldcpp_cu12.exe
 if exist koboldcpp.exe (
@@ -83,17 +78,25 @@ if exist koboldcpp.exe (
 ) else if exist koboldcpp_cu12.exe (
     set "KOBOLD_EXE=koboldcpp_cu12.exe"
 ) else (
-    echo Neither koboldcpp.exe nor koboldcpp_cu12.exe found. Please ensure one of these files exists.
-    pause
-    exit /b 1
+    echo Neither koboldcpp.exe nor koboldcpp_cu12.exe found. Attempting to download latest version...
+	powershell -Command "(New-Object Net.WebClient).DownloadFile('https://github.com/LostRuins/koboldcpp/releases/latest/download/koboldcpp.exe', 'koboldcpp.exe')"
+)
+if exist koboldcpp.exe (
+    set "KOBOLD_EXE=koboldcpp.exe"
+) else (
+	echo Failed to find koboldcpp.exe. Download it and retry.
+	pause
+	exit /b 1
 )
 
 REM Launch KoboldCPP with selected model
-start %KOBOLD_EXE% %TEXT_MODEL% --mmproj %IMAGE_PROJECTOR% --flashattention --contextsize 4096
+start %KOBOLD_EXE% %TEXT_MODEL% --mmproj %IMAGE_PROJECTOR% --flashattention --contextsize 4096 --chatcompletionsadapter chatml.json
 
+echo Status will update here when indexing has been started...
+ 
 :Load
-REM Launch your Python script
-python llmii-gui.py
+REM Launch
+python llmii_gui.py
 pause
 
 REM Deactivate the virtual environment

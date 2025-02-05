@@ -46,15 +46,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Download NLTK data
-echo "Downloading NLTK data..."
-python3 -c "import nltk; nltk.download('wordnet')"
-
 # Clear screen
 clear
 
-TEXT_MODEL="https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/Qwen2-VL-7B-Instruct-Q4_K_M.gguf"
-IMAGE_PROJECTOR="https://huggingface.co/bartowski/Qwen2-VL-7B-Instruct-GGUF/blob/main/mmproj-Qwen2-VL-7B-Instruct-f16.gguf"
+TEXT_MODEL="https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/blob/main/Qwen2-VL-2B-Instruct-Q6_K.gguf"
+IMAGE_PROJECTOR="https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/blob/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf"
 
        
 # Determine the correct KoboldCPP binary based on the system

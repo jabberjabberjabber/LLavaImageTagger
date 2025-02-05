@@ -65,15 +65,14 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-
-REM Download NLTK data
-echo Downloading NLTK data...
-python -c "import nltk; nltk.download('wordnet')"
-
-REM Launch your Python script
-python llmii-gui.py
-
+cls
+echo Status will update here when indexing has been started...
+ 
+:Load
+REM Launch
+python llmii_gui.py
 pause
+
 REM Deactivate the virtual environment
 deactivate
 
