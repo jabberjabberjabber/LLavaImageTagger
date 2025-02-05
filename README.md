@@ -28,7 +28,6 @@ This tool verifies keywords and de-pluralizes them using rules that apply to Eng
 
 This tool operates directly on image file metadata. It will write to one or more of the following fields:
 
-- MWG:Keywords, which may write to any of the following fields:
   1. Subject
   2. Any keyword field
   3. Description
