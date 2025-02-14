@@ -75,7 +75,7 @@ fi
 
 # Launch KoboldCPP with selected model if a model was chosen
 if [ "$MODEL_CHOICE" != "4" ]; then
-    "$KOBOLDCPP_BINARY" "$TEXT_MODEL" --mmproj "$IMAGE_PROJECTOR" --flashattention --contextsize 4096 &
+    "$KOBOLDCPP_BINARY" "$TEXT_MODEL" --mmproj "$IMAGE_PROJECTOR" --flashattention --contextsize 4096 --visionmaxres 9999 &
 
 # Launch the Python GUI script
 python3 llmii-gui.py

@@ -92,7 +92,7 @@ if exist koboldcpp.exe (
 )
 
 REM Launch KoboldCPP with selected model
-start %KOBOLD_EXE% %TEXT_MODEL% --mmproj %IMAGE_PROJECTOR% --flashattention --contextsize 4096 --chatcompletionsadapter chatml.json
+start %KOBOLD_EXE% %TEXT_MODEL% --mmproj %IMAGE_PROJECTOR% --flashattention --contextsize 4096 --visionmaxres 9999 --chatcompletionsadapter chatml.json
 
 echo Status will update here when indexing has been started...
  
