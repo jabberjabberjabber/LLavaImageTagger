@@ -83,6 +83,8 @@ if exist koboldcpp.exe (
 )
 if exist koboldcpp.exe (
     set "KOBOLD_EXE=koboldcpp.exe"
+) else if exist koboldcpp_cu12.exe (
+    set "KOBOLD_EXE=koboldcpp_cu12.exe"
 ) else (
 	echo Failed to find koboldcpp.exe. Download it and retry.
 	pause
