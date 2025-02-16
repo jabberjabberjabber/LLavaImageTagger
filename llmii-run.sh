@@ -73,12 +73,11 @@ if [ ! -x "$KOBOLDCPP_BINARY" ]; then
     exit 1
 fi
 
-# Launch KoboldCPP with selected model if a model was chosen
-if [ "$MODEL_CHOICE" != "4" ]; then
-    "$KOBOLDCPP_BINARY" "$TEXT_MODEL" --mmproj "$IMAGE_PROJECTOR" --flashattention --contextsize 4096 --visionmaxres 9999 &
+
+"$KOBOLDCPP_BINARY" "$TEXT_MODEL" --mmproj "$IMAGE_PROJECTOR" --flashattention --contextsize 4096 --visionmaxres 9999 &
 
 # Launch the Python GUI script
-python3 llmii-gui.py
+python3 llmii_gui.py
 
 # Deactivate the virtual environment when the GUI is closed
 deactivate

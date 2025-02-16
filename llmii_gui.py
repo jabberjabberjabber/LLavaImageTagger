@@ -211,11 +211,7 @@ class ImageIndexerGUI(QMainWindow):
         self.setWindowTitle("Image Indexer GUI")
         self.setGeometry(100, 100, 800, 600)
         
-        menubar = self.menuBar()
-        settings_menu = menubar.addMenu("Settings")
-        
-        settings_action = settings_menu.addAction("Configure")
-        settings_action.triggered.connect(self.show_settings)
+        # Remove all menubar code
         
         self.settings_dialog = SettingsDialog(self)
 
@@ -227,6 +223,7 @@ class ImageIndexerGUI(QMainWindow):
         fixed_layout = QVBoxLayout(fixed_content)
         fixed_layout.setContentsMargins(0, 0, 0, 0)
         
+        # Directory and Settings section
         dir_layout = QHBoxLayout()
         self.dir_input = QLineEdit()
         dir_button = QPushButton("Select Directory")
@@ -235,6 +232,13 @@ class ImageIndexerGUI(QMainWindow):
         dir_layout.addWidget(self.dir_input)
         dir_layout.addWidget(dir_button)
         fixed_layout.addLayout(dir_layout)
+
+        # Settings button section
+        settings_layout = QHBoxLayout()
+        settings_button = QPushButton("Settings")
+        settings_button.clicked.connect(self.show_settings)
+        settings_layout.addWidget(settings_button)
+        fixed_layout.addLayout(settings_layout)
 
         self.api_status_label = QLabel("API Status: Checking...")
         layout.addWidget(self.api_status_label)
