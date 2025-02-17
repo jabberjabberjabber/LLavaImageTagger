@@ -383,16 +383,15 @@ class FileProcessor:
         self.files_completed = 0
         
         # Words in the prompt tend to get repeated back by certain models
-        self.banned_words = ["action", "no", "unspecified", "perspective", "unknown", "standard", "unindentified", "type", "time", "category", "actions", "setting", "objects", "visual", "composition", "structures", "elements", "activities", "appearance", "gender", "professions", "relationships", "identify", "photography", "photographic"]
+        self.banned_words = ["action", "no", "unspecified", "perspective", "unknown", "standard", "unindentified", "type", "time", "category", "actions", "setting", "objects", "visual", "composition", "structures", "elements", "activities", "appearance", "gender", "professions", "relationships", "identify", "photography", "photographic", "background", 'color', "texture"]
                 
         # These are the fields we check. ExifTool returns are kind of strange, not always
         # conforming to where they are or what they actually are named
         self.exiftool_fields = [
             "MWG:Keywords",
             "XMP:Identifier",
-            "IPTC:Keywords",
-            "Subject",
-            "Keywords"
+            "XMP:Subject",
+            "Keywords",
         ]
         self.image_extensions = {
             "JPEG": [
@@ -569,6 +568,13 @@ class FileProcessor:
                 for metadata in metadata_list:
                     self.files_processed += 1        
                     if metadata:
+                        # Check if ExifTool returned any Warnings or Errors. It comes as value "0 0 0"
+                        # for number of errors warnings and minor warnings
+                        errors, warnings, minor = map(int, metadata.get("ExifTool:Validate").split())
+                        if errors > 0 or (warnings > 0 and warnings != minor):
+                            print(f"{metadata.get("SourceFile")}: failed to validate. Skipping!")
+                            self.callback(f"----\n{metadata.get("SourceFile")}: failed to validate. Skipping!")
+                            continue
                         keywords = metadata.get("Keywords", [])
                         if metadata.get("Composite:Keywords"):
                             keywords += metadata.get("Composite:Keywords")
@@ -593,7 +599,7 @@ class FileProcessor:
 
     def _get_metadata_batch(self, files):
         with exiftool.ExifToolHelper(check_execute=False) as et:  
-            return et.get_tags(files, tags=self.exiftool_fields)         
+            return et.get_tags(files, self.exiftool_fields, "-validate")         
 
     def update_progress(self):
         files_processed = self.files_processed
