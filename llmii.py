@@ -571,9 +571,10 @@ class FileProcessor:
                         # Check if ExifTool returned any Warnings or Errors. It comes as value "0 0 0"
                         # for number of errors warnings and minor warnings
                         errors, warnings, minor = map(int, metadata.get("ExifTool:Validate").split())
+                        source_file = metadata.get("SourceFile")
                         if errors > 0 or (warnings > 0 and warnings != minor):
-                            print(f"{metadata.get("SourceFile")}: failed to validate. Skipping!")
-                            self.callback(f"----\n{metadata.get("SourceFile")}: failed to validate. Skipping!")
+                            print(f"{source_file}: failed to validate. Skipping!")
+                            self.callback(f"----\n{source_file}: failed to validate. Skipping!")
                             continue
                         keywords = metadata.get("Keywords", [])
                         if metadata.get("Composite:Keywords"):
