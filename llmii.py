@@ -829,7 +829,7 @@ class FileProcessor:
                         )
                 else:
                     with exiftool.ExifToolHelper() as et:
-                        et.set_tags(file_path, tags=xmp_metadata)
+                        et.set_tags(file_path, tags=xmp_metadata, params=["-P"])
                 metadata["status"] = "success"
                 xmp_metadata["status"] = "success"
                 self.update_db(xmp_metadata)
