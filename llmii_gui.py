@@ -62,6 +62,7 @@ class SettingsDialog(QDialog):
         self.reprocess_orphans_checkbox = QCheckBox("Reprocess orphan files")
         self.no_backup_checkbox = QCheckBox("Don't make backups")
         self.dry_run_checkbox = QCheckBox("Pretend mode")
+        self.skip_verify_checkbox = QCheckBox("Don't check files for errors")
         
         options_layout.addWidget(self.no_crawl_checkbox)
         options_layout.addWidget(self.reprocess_all_checkbox)
@@ -69,6 +70,7 @@ class SettingsDialog(QDialog):
         options_layout.addWidget(self.reprocess_orphans_checkbox)
         options_layout.addWidget(self.no_backup_checkbox)
         options_layout.addWidget(self.dry_run_checkbox)
+        options_layout.addWidget(self.skip_verify_checkbox)
         
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
@@ -119,6 +121,7 @@ class SettingsDialog(QDialog):
                 self.reprocess_orphans_checkbox.setChecked(settings.get('reprocess_orphans', False))
                 self.no_backup_checkbox.setChecked(settings.get('no_backup', False))
                 self.dry_run_checkbox.setChecked(settings.get('dry_run', False))
+                self.skip_verify_checkbox.setChecked(settings.get('skip_verify', False))
                 
                 self.caption_instruction_input.setText(settings.get('caption_instruction', 'Describe the image in detail. Be specific.'))
                 self.write_caption_checkbox.setChecked(settings.get('write_caption', False))
@@ -141,6 +144,7 @@ class SettingsDialog(QDialog):
             'reprocess_orphans': self.reprocess_orphans_checkbox.isChecked(),
             'no_backup': self.no_backup_checkbox.isChecked(),
             'dry_run': self.dry_run_checkbox.isChecked(),
+            'skip_verify': self.skip_verify_checkbox.isChecked(),
             'overwrite_keywords': self.overwrite_keywords_radio.isChecked(),
             'caption_instruction': self.caption_instruction_input.text(),
             'write_caption': self.write_caption_checkbox.isChecked()
@@ -399,6 +403,7 @@ Provide one word per entry; if more than one word is required split into two ent
         config.reprocess_orphans = self.settings_dialog.reprocess_orphans_checkbox.isChecked()
         config.no_backup = self.settings_dialog.no_backup_checkbox.isChecked()
         config.dry_run = self.settings_dialog.dry_run_checkbox.isChecked()
+        config.skip_verify = self.settings_dialog.skip_verify_checkbox.isChecked()
         
         # Load instruction from main window
         config.instruction = self.instruction_input.toPlainText()

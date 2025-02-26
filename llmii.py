@@ -236,6 +236,7 @@ class Config:
         self.gen_count = 350
         self.write_caption = False
         self.overwrite_caption = True
+        self.skip_verify = False
         self.caption_instruction = "Describe the image in detail. Be specific."
         self.system_instruction = "You are a helpful assistant."
         self.instruction = """Your task is to first generate a detailed description for the image. If a description is included with the image, use that one.
@@ -300,6 +301,9 @@ Provide one word per entry; if more than one word is required split into two ent
             "--gen-count", default=150, help="Number of tokens to generate"
         )
         parser.add_argument("--write-description", action="store_true", help="Write description")
+        parser.add_argument(
+            "--skip-verify", action="store_true", help="Skip verifying file metadata validty before processing"
+        )
         args = parser.parse_args()
 
         config = cls()
@@ -323,7 +327,7 @@ class LLMProcessor:
             "rep_pen": 1.05,
             "min_p": 0,
         }
-        self.core = KoboldAPICore(config.api_url, config.api_password, config_dict)
+        self.core = KoboldAPICore(config.api_url, config.api_password, **config_dict)
 
     def describe_content(self, file_path, task="keywords", caption=""):
         if task == "keywords":
@@ -568,14 +572,15 @@ class FileProcessor:
                 for metadata in metadata_list:
                     self.files_processed += 1        
                     if metadata:
-                        # Check if ExifTool returned any Warnings or Errors. It comes as value "0 0 0"
-                        # for number of errors warnings and minor warnings
-                        errors, warnings, minor = map(int, metadata.get("ExifTool:Validate").split())
-                        source_file = metadata.get("SourceFile")
-                        if errors > 0 or (warnings > 0 and warnings != minor):
-                            print(f"{source_file}: failed to validate. Skipping!")
-                            self.callback(f"----\n{source_file}: failed to validate. Skipping!")
-                            continue
+                        if not self.config.skip_verify:
+                            # Check if ExifTool returned any Warnings or Errors. It comes as value "0 0 0"
+                            # for number of errors warnings and minor warnings
+                            errors, warnings, minor = map(int, metadata.get("ExifTool:Validate").split())
+                            source_file = metadata.get("SourceFile")
+                            if errors > 0 or (warnings > 0 and warnings != minor):
+                                print(f"{source_file}: failed to validate. Skipping!")
+                                self.callback(f"----\n{source_file}: failed to validate. Skipping!")
+                                continue
                         keywords = metadata.get("Keywords", [])
                         if metadata.get("Composite:Keywords"):
                             keywords += metadata.get("Composite:Keywords")
