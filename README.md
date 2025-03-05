@@ -8,6 +8,12 @@ By storing the information in the file metadata the images can be moved, renamed
 
 Uses the Qwen2-VL 2B model, a 2 billion parameter multimodal local large language model. It runs on your machine to recognize images and describe them and generate keywords. However, you can use any image model you like as long as it has weights in the "gguf" filetype and it has an appropriate "mmproj" image projector. 
 
+**As of March 2025**:
+   - The tool no longer uses a database. Files can be moved and renamed, and if the tool is run on them again, they will be automatically recognized as already processed!
+   - Refactored for major speed improvement. Time for image processing reduced by 3 - 4 seconds! Average speed with "Quick fail" and "Short caption" is 1.5 seconds per image on Windows with an nVidia 3080 using Qwen2-VL-2B at Q6_K. 
+
+![Screenshot](llmii.png)
+
 ## Features
  
 - **Image Analysis**: Utilizes a local AI model to generate a list of keywords and a caption for each image
@@ -28,11 +34,10 @@ This tool verifies keywords and de-pluralizes them using rules that apply to Eng
 
 This tool operates directly on image file metadata. It will write to one or more of the following fields:
 
-  1. Subject
-  2. Any keyword field
-  3. Description
-  4. Identifier
-  5. Status
+  1. MWG:Keyword
+  2. MWG:Description
+  3. XMP:Identifier
+  4. XMP:Status
   
 The "Status" and "Identifier" fields are used to track the processing state of images. The "Description" field is used for the image caption, and "Subject" or "Keyword" fields are used to hold keywords.
 
@@ -84,7 +89,7 @@ The "Status" and "Identifier" fields are used to track the processing state of i
 
 1. Clone the repository or download and extract the ZIP file
 
-2. Install Python 3.7 or higher if not already installed. Use your distribution's package manager, for example on Ubuntu:
+2. Install Python 3.8 or higher if not already installed. Use your distribution's package manager, for example on Ubuntu:
    ```
    sudo apt-get update
    sudo apt-get install python3 python3-pip
@@ -124,26 +129,28 @@ For all platforms, the script will set up the Python environment, install depend
 
 5. Monitor the progress in the output area of the GUI.
 
-## Configuration Options
+## Settings
 
-- **Directory**: Target image directory (includes subdirectories by default)
-- **API URL**: KoboldCPP API endpoint (change if running on another machine)
-- **API Password**: Set if required by your KoboldCPP setup
-- **Caption Instruction**: The instruction to use when generating a detailed caption
-- **Write a detailed caption**: Have the LLM describe the image in detail and set it in XMP:Description (at least doubles processing time). This will overwrite any existing caption in the image metadata
-- **GenTokens**: Amount of tokens for the LLM to use per generation
-- **Don't crawl subdirectories**: Disable scanning of subdirectories
-- **Reprocess all files again**: Will generate keywords and captions for all images files regardless of prior processing (checking this will include failed and orphan files in reprocessing)
-- **Reprocess failed files**: If a file was marked failed during prior processing, it will processed again. If this is unchecked, previously failed files are ignored
-- **Reprocess orphan files**: If the file was previously processed, and the llmii.json file in the root directory was deleted, or the image file was moved or renamed, if will be processed again. If this box is unchecked, previously processed files will be ignored, regardless of its existence in the database
-- **Don't make backups**: Before changing anything in a file, a backup will be made called "Filename.extension_original". If this box is checked, these files will not be created and the original file will be altered with no backup
-- **Pretend mode**: Simulate processing without writing to files or database
-- **Clear existing keywords and captions and write new ones**: If this is selected any keywords and captions that exist will be overwritten
-- **Add to existing keywords**: If this is selected then any keywords that exist will be appended to the new keywords, and any captions created during this process will be discarded. This is useful for running on image files already processed (with the reprocess all files box checked) to add more keywords to them
+   - **API URL**: The address for the KoboldCpp API server
+   - **Password**: Only needed if you set a password via KoboldCpp, used to access the API
+   - **System Instruction**: This will be whatever the model is trained to use. Best not to mess with it unless you know what you are doing
+   - **Caption Instruction**: Tells the model how to create a detailed caption. Set to whatever you like, but the default works fine
+   - **Generate detailed caption**: Will use a generation to create a caption, and another generation to create keywords. You end up with a much more detailed caption at the expense of twice the compute time. Usually not worth it
+   - **Generate short caption**: the default. Caption is generated along with keywords
+   - **No caption**: Use this only if you don't want to overwrite an existing caption. It does not save any compute time
+   - **Don't crawl subdirectories**: Will only look for images in the directory you specify, and will not go into any others inside it
+   - **Reprocess all files again**: Regardless of previous processing status, reprocess all images. This is useful if you want to add more keywords with a second processing step by using it along with the "Add to existing keywords" option. Best results in a different model is used for each processing
+   - Reprocess failed files: does what it says
+   - **If file has UUID, mark status**: This will look for a UUID in the file which was set by the tool. If it finds one, it will see if there are keywords in the metadata and if so mark the file status as 'success'. This allows you to run it on files previously process by and older version that used a database for marking status without having to reprocess every file again. Once the file has the status set it will be just like any other file processed by the new version of the tool
+   - **No file checking**: This will skip the file verification step. Only use this if you are having a problem with valid files being skipped. It may cause the indexer to freeze if files with errors are encountered
+   - **Pretend mode / Dry run**: Let's you see what output you would get from the LLM without actually writing to any files
+   - **Quick fail**: If any kind of error occurs parsing the data from the LLM, don't bother retrying it and mark the file failed and move on. Use this if you are in a hurry
+   - **Add new keywords to existing keywords**: Will append the generated keywords to any existing keywords. If this isn't checked and there are keywords in the field that exiftool writes the new keywords to, they will be overwritten
+   - **Add new caption to existing caption with <caption>**: If a caption is generated and a caption already exists in the field exiftool writes the caption to, it will wrap the generated caption with <generated> and </generated> and append it to the end of the existing one  
 
 ## More Information and Troubleshooting
 
-Consult [the wiki](https://github.com/jabberjabberjabber/LLavaImageTagger/wiki) for more information and troubleshooting steps.
+Consult [the wiki](https://github.com/jabberjabberjabber/LLavaImageTagger/wiki) for detailed information.
 
 ## Contributing
 
