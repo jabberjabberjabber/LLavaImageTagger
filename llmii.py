@@ -1,11 +1,13 @@
 import os, json, time, re, argparse, exiftool, threading, queue, calendar, io, uuid
+import copy
+import shutil
+import sys
 
-from tinydb import TinyDB, where, Query
 from json_repair import repair_json as rj
 from datetime import timedelta
 from llmii_utils import first_json, de_pluralize, AND_EXCEPTIONS
 from koboldapi import KoboldAPICore, ImageProcessor
-
+    
 def split_on_internal_capital(word):
     """ Split a word if it contains a capital letter after the 4th position.
         Returns the original word if no split is needed, or the split 
@@ -55,13 +57,14 @@ def normalize_keyword(keyword, banned_words):
     # Replace multiple spaces/hyphens with single space/hyphen
     keyword = re.sub(r'\s+', ' ', keyword)
     keyword = re.sub(r'-+', '-', keyword)
+    keyword = re.sub(r'_', ' ', keyword)
     
     # For validation, we'll track both original tokens and split words
     tokens = keyword.split()
     words = []
     
     # Validate and collect words for length checking
-    for token in tokens:
+    for token in tokens:    
         # Handle hyphenated words
         if '-' in token:
             # Check if hyphen is between alphanumeric chars
@@ -227,40 +230,80 @@ class Config:
         self.no_crawl = False
         self.no_backup = False
         self.dry_run = False
-        self.overwrite_keywords = False
         self.update_keywords = False
         self.reprocess_failed = False
         self.reprocess_all = False
-        self.reprocess_orphans = False
+        self.reprocess_orphans = True
         self.text_completion = False
-        self.gen_count = 350
-        self.write_caption = False
-        self.overwrite_caption = True
+        self.gen_count = 150
+        self.detailed_caption = False
+        self.short_caption = True
         self.skip_verify = False
-        self.caption_instruction = "Describe the image in detail. Be specific."
+        self.quick_fail = False
+        self.no_caption = False
+        self.update_caption = False
+        self.caption_instruction = "Describe the image."
         self.system_instruction = "You are a helpful assistant."
-        self.instruction = """Your task is to first generate a detailed description for the image. If a description is included with the image, use that one.
+        self.instruction = """First, generate a detailed caption for the image.
 
-Next, generate at least 10 unique Keywords for the image. Include:
+Next, generate 7 unique one or two word keywords for the image. Include the following when present:
 
- - Actions
- - Setting, location and background
- - Items and structures
- - Colors and textures
- - Composition, framing
- - Photographic style 
- - If there is one or more person:
-   - Subjects
+ - Themes, concepts
+ - Items, animals, objects
+   - Key features, aspects
+ - Structures, landmarks, setting
+   - Foreground and background elements   
+ - Notable colors, textures, styles
+ - Actions, activities
+ - Human demographics:
    - Physical appearance
-   - Clothing
-   - Gender
-   - Age
-   - Professions
-   - Relationships 
+   - Age range
+   - Apparent ancestry
+   - Visible occupation/role
+   - Obvious relationships between individuals
+   - Clearly conveyed emotions, expressions, body language
+   
+Limit response to things clearly and obviously apparent; do not guess. Do not combine words. Use ENGLISH only. Generate ONLY a JSON object with the keys Caption and Keywords as follows {"Caption": str, "Keywords": []}"""
 
-
-Provide one word per entry; if more than one word is required split into two entries. Do not combine words. Generate ONLY a JSON object with the keys Caption and Keywords as follows {"Caption": str, "Keywords": [list]}"""
-
+        self.image_extensions = {
+        "JPEG": [
+            ".jpg",
+            ".jpeg",
+            ".jpe",
+            ".jif",
+            ".jfif",
+            ".jfi",
+            ".jp2",
+            ".j2k",
+            ".jpf",
+            ".jpx",
+            ".jpm",
+            ".mj2",
+        ],
+        "PNG": [".png"],
+        "GIF": [".gif"],
+        "TIFF": [".tiff", ".tif"],
+        "WEBP": [".webp"],
+        "HEIF": [".heif", ".heic"],
+        "RAW": [
+            ".raw",  # Generic RAW
+            ".arw",  # Sony
+            ".cr2",  # Canon
+            ".cr3",  # Canon (newer format)
+            ".dng",  # Adobe Digital Negative
+            ".nef",  # Nikon
+            ".nrw",  # Nikon
+            ".orf",  # Olympus
+            ".pef",  # Pentax
+            ".raf",  # Fujifilm
+            ".rw2",  # Panasonic
+            ".srw",  # Samsung
+            ".x3f",  # Sigma
+            ".erf",  # Epson
+            ".kdc",  # Kodak
+            ".rwl",  # Leica
+        ]}
+        
     @classmethod
     def from_args(cls):
         parser = argparse.ArgumentParser(description="Image Indexer")
@@ -283,16 +326,13 @@ Provide one word per entry; if more than one word is required split into two ent
             "--dry-run", action="store_true", help="Don't write any files"
         )
         parser.add_argument(
-            "--overwrite-keywords", action="store_true", help="Overwrite existing keyword metadata"
-        )
-        parser.add_argument(
             "--reprocess-all", action="store_true", help="Reprocess all files"
         )
         parser.add_argument(
             "--reprocess-failed", action="store_true", help="Reprocess failed files"
         )
         parser.add_argument(
-            "--reprocess-orphans", action="store_true", help="If a file has a UUID and keywords but is not in the database, skip processing it"
+            "--reprocess-orphans", action="store_true", help="If a file has a UUID, determine its status"
         )
         parser.add_argument(
             "--update-keywords", action="store_true", help="Update existing keyword metadata"
@@ -300,10 +340,14 @@ Provide one word per entry; if more than one word is required split into two ent
         parser.add_argument(
             "--gen-count", default=150, help="Number of tokens to generate"
         )
-        parser.add_argument("--write-description", action="store_true", help="Write description")
+        parser.add_argument("--detailed-caption", action="store_true", help="Write a detailed caption along with keywords")
         parser.add_argument(
-            "--skip-verify", action="store_true", help="Skip verifying file metadata validty before processing"
+            "--skip-verify", action="store_true", help="Skip verifying file metadata validity before processing"
         )
+        parser.add_argument("--update-caption", action="store_true", help="Add the generated caption to the existing description tag")
+        parser.add_argument("--quick-fail", action="store_true", help="Mark failed after one try")
+        parser.add_argument("--short-caption", action="store_true", help="Write a short caption along with keywords")
+        parser.add_argument("--no-caption", action="store_true", help="Do not modify caption")
         args = parser.parse_args()
 
         config = cls()
@@ -318,29 +362,30 @@ class LLMProcessor:
         self.instruction = config.instruction
         self.system_instruction = config.system_instruction
         self.caption_instruction = config.caption_instruction
-        self.image_processor = ImageProcessor(max_dimension=1344)
         config_dict = {
             "max_length": config.gen_count,
-            "top_p": 1,
-            "top_k": 40,
+            "top_p": 0.95,
+            "top_k": 0,
             "temp": 0.3,
             "rep_pen": 1.05,
-            "min_p": 0,
+            "min_p": 0.05,
         }
         self.core = KoboldAPICore(config.api_url, config.api_password, **config_dict)
 
-    def describe_content(self, file_path, task="keywords", caption=""):
-        if task == "keywords":
-            instruction = self.instruction
-        elif task == "caption":
-            instruction = self.caption_instruction
-        elif task == "keywords_with_caption":
-            instruction = "Included description: \n" + caption + "\n\n" + self.instruction
-        else:
-            print(f"Invalid task")
+    def describe_content(self, task="", processed_image=None):
+        if not processed_image:
+            print("No image to describe.")
             return None
-        encoded_image, path = self.image_processor.process_image(file_path)
-        return self.core.wrap_and_generate(instruction=instruction, images=[encoded_image])
+        if task == "caption":
+            instruction = self.caption_instruction
+        elif task == "keywords":
+            instruction = self.instruction
+        elif task == "caption_and_keywords":
+            instruction = self.instruction
+        else:
+            print(f"invalid task: {task}")
+            return None
+        return self.core.wrap_and_generate(instruction = instruction, system_instruction=self.system_instruction, images=[processed_image])
 
 class BackgroundIndexer(threading.Thread):
     def __init__(self, root_dir, metadata_queue, file_extensions, no_crawl=False):
@@ -370,72 +415,71 @@ class BackgroundIndexer(threading.Thread):
         if files:
             self.total_files_found += len(files)
             self.metadata_queue.put((directory, files))
-            
 class FileProcessor:
-    def __init__(self, config, check_paused_or_stopped, callback):
+
+    def __init__(self, config, check_paused_or_stopped=None, callback=None):
         self.config = config
         self.llm_processor = LLMProcessor(config)
-        self.check_paused_or_stopped = check_paused_or_stopped
-        self.callback = callback
-        if os.path.isdir(config.directory):
-            self.db = TinyDB(f"{os.path.join(config.directory, 'llmii.json')}")
+        
+        if check_paused_or_stopped is None:
+
+            self.check_paused_or_stopped = lambda: False
         else:
-            self.db = TinyDB("llmii.json")
+            self.check_paused_or_stopped = check_paused_or_stopped
+            
+        if callback is None:
+            self.callback = print
+        else:
+            self.callback = callback
+        
         self.files_in_queue = 0
         self.total_processing_time = 0
         self.files_processed = 0
         self.files_completed = 0
+        # Multiples of 28 for Qwen-2-VL: 336, 448, 560, 672, 784, 980
+        self.image_processor = ImageProcessor(max_dimension=560)
+        
+        self.et = exiftool.ExifToolHelper(check_execute=False)
         
         # Words in the prompt tend to get repeated back by certain models
-        self.banned_words = ["action", "no", "unspecified", "perspective", "unknown", "standard", "unindentified", "type", "time", "category", "actions", "setting", "objects", "visual", "composition", "structures", "elements", "activities", "appearance", "gender", "professions", "relationships", "identify", "photography", "photographic", "background", 'color', "texture"]
+        self.banned_words = ["no", "unspecified", "unknown", "standard", "unidentified", "time", "category", "actions", "setting", "objects", "visual", "elements", "activities", "appearance", "professions", "relationships", "identify", "photography", "photographic", "topiary"]
                 
         # These are the fields we check. ExifTool returns are kind of strange, not always
-        # conforming to where they are or what they actually are named
-        self.exiftool_fields = [
-            "MWG:Keywords",
-            "XMP:Identifier",
-            "XMP:Subject",
+        # conforming to where they are or what they actually are named. These should find all of them
+        self.keyword_fields = [
             "Keywords",
+            "IPTC:Keywords",
+            "Composite:keywords",
+            "Subject",
+            "DC:Subject",
+            "XMP:Subject",
+            "XMP-dc:Subject"
         ]
-        self.image_extensions = {
-            "JPEG": [
-                ".jpg",
-                ".jpeg",
-                ".jpe",
-                ".jif",
-                ".jfif",
-                ".jfi",
-                ".jp2",
-                ".j2k",
-                ".jpf",
-                ".jpx",
-                ".jpm",
-                ".mj2",
-            ],
-            "PNG": [".png"],
-            "GIF": [".gif"],
-            "TIFF": [".tiff", ".tif"],
-            "WEBP": [".webp"],
-            "HEIF": [".heif", ".heic"],
-            "RAW": [
-                ".raw",  # Generic RAW
-                ".arw",  # Sony
-                ".cr2",  # Canon
-                ".cr3",  # Canon (newer format)
-                ".dng",  # Adobe Digital Negative
-                ".nef",  # Nikon
-                ".nrw",  # Nikon
-                ".orf",  # Olympus
-                ".pef",  # Pentax
-                ".raf",  # Fujifilm
-                ".rw2",  # Panasonic
-                ".srw",  # Samsung
-                ".x3f",  # Sigma
-                ".erf",  # Epson
-                ".kdc",  # Kodak
-                ".rwl",  # Leica
-            ],
-        }
+        self.caption_fields = [
+            "Description",
+            "XMP:Description",
+            "ImageDescription",
+            "DC:Description",
+            "EXIF:ImageDescription",
+            "Composite:Description",
+            "Caption",
+            "IPTC:Caption",
+            "Composite:Caption"
+            "IPTC:Caption-Abstract",
+            "XMP-dc:Description",
+            "PNG:Description"
+        ]
+
+        self.identifier_fields = [
+            "Identifier",
+            "XMP:Identifier",            
+        ]
+        self.status_fields = [
+            "Status",
+            "XMP:Status"
+        ]
+        
+        self.image_extensions = config.image_extensions
         self.metadata_queue = queue.Queue()
         self.indexer = BackgroundIndexer(
             config.directory, 
@@ -459,83 +503,69 @@ class FileProcessor:
         return None
 
     def check_uuid(self, metadata, file_path):
-        """ Very important or we end up with multiple
-            DB entries or reprocess files for no reason
+        """ Very important or we end up processing 
+            files more than once
         """ 
         try:
-            identifier = metadata.get("XMP:Identifier")
-            source_file = self.db.get(where("SourceFile") == file_path)
-            existing_entry = self.db.get(where("XMP:Identifier") == identifier)
-            are_keywords = False
-            if metadata.get("Keywords"):
-                are_keywords = True
-            
-            # Case 1: File has a UUID in metadata
-            if identifier:
-                if self.config.reprocess_all:
-                    return metadata
-                if existing_entry:    
-                    if existing_entry.get("status") == "failed":
-                        if self.config.reprocess_failed:
-                            return metadata
-                    if existing_entry.get("status") == "retry":
-                        return metadata
-                    print(f"{file_path} skipped.")
-                    return None 
-                
-                # Orphan -- has UUID and Keywords but not in db
-                if self.config.reprocess_orphans and are_keywords:
-                    print(f"{file_path} skipped.") 
-                    return None
-                return metadata  
 
-            # Case 2: File has no UUID in metadata
-            else:
-                # Check if there's a database entry for this file path
-                if source_file:
+            status = metadata.get("XMP:Status")
+            identifier = metadata.get("XMP:Identifier")
+            keywords = metadata.get("MWG:Keywords")
+            caption = metadata.get("MWG:Description")
+            
+            if identifier and self.config.reprocess_orphans:
+                if not status:
+                    if keywords:
+                        metadata["XMP:Status"] = "success"
                     
-                    # File has a database entry but no UUID in metadata
-                    if source_file.get("status") == "failed":
-                        if self.config.reprocess_failed:
-                            
-                            # Remove the file path and status from the database entry
-                            self.db.remove(Query().SourceFile == file_path)
-                            metadata["XMP:Identifier"] = str(uuid.uuid4())
-                            return metadata  # Process the file as if it were new
-                        else:
-                            print(f"{file_path} skipped.")
-                            return None  # Skip failed file if not retrying
-                    elif source_file.get("status") == "retry":
-                        return metadata
+                    if not keywords:
+                        metadata["XMP:Status"] = "failed" 
                 
-                # No database entry or UUID, treat as new file
+                    try:
+                        written = self.write_metadata(file_path, metadata)
+                        if written:
+                            print(f"Status added for orphan: {file_path}")  
+                            self.callback(f"Status added for orphan: {file_path}")
+                        else:
+                            print(f"Metadata write error for orphan: {file_path}")
+                            self.callback(f"Metadata write error for orphan: {file_path}")
+                    except:
+                        print("Error writing orphan status")
+            # Does file have a UUID in metadata
+            if identifier:
+               
+                if not self.config.reprocess_all and status == "success":
+                    return None
+                    
+                # If it is retry, do it again
+                if self.config.reprocess_all or status == "retry":
+                    metadata["XMP:Status"] = None
+                    return metadata
+                
+                # If it is fail, don't do it unless we specifically want to
+                if status == "failed":
+                    if self.config.reprocess_failed or self.config.reprocess_all:
+                        metadata["XMP:Status"] = None
+                        return metadata                    
+                    else:
+                        return None
+                
+                # If there are no keywords, processs it                
+                if not keywords:
+                    metadata["XMP:Status"] = None
+                    return metadata
+                
                 else:
-                    metadata["XMP:Identifier"] = str(uuid.uuid4())
-                    return metadata  # New file
+                    return None
+                
+            # No UUID, treat as new file
+            else:
+                metadata["XMP:Identifier"] = str(uuid.uuid4())
+                return metadata  # New file
 
         except Exception as e:
             print(f"Error checking UUID: {str(e)}")
             return None
-            
-    def update_db(self, metadata):
-        if self.config == "dry_run":
-            return
-        try:
-            uuid = metadata.get("XMP:Identifier")
-            db_entry = {
-                "XMP:Identifier": uuid,
-                "status": metadata.get("status", "success")
-            }
-            
-            # Successful processing should not have a sourcefile entry
-            if metadata.get("status") in ["failed", "retry"]:
-                db_entry["SourceFile"] = metadata.get("SourceFile")
-           
-            self.db.upsert(db_entry, where("XMP:Identifier") == uuid)
-            print(f"DB Updated with UUID: {uuid}")
-        
-        except Exception as e:
-            print(f"Error updating DB with UUID: {uuid}: {str(e)}")
                         
     def check_pause_stop(self):
         if self.check_paused_or_stopped():
@@ -560,52 +590,98 @@ class FileProcessor:
         return files
                 
     def process_directory(self, directory):
-        while not (self.indexer.indexing_complete and self.metadata_queue.empty()):
-            if self.check_pause_stop():
-                return
-            
-            try:
-                directory, files = self.metadata_queue.get(timeout=1)
-                self.callback(f"Processing directory: {directory}")
-                metadata_list = self._get_metadata_batch(files)
+        try:
+            while not (self.indexer.indexing_complete and self.metadata_queue.empty()):
+                if self.check_pause_stop():
+                    return
                 
-                for metadata in metadata_list:
-                    self.files_processed += 1        
-                    if metadata:
-                        if not self.config.skip_verify:
-                            # Check if ExifTool returned any Warnings or Errors. It comes as value "0 0 0"
-                            # for number of errors warnings and minor warnings
-                            errors, warnings, minor = map(int, metadata.get("ExifTool:Validate").split())
-                            source_file = metadata.get("SourceFile")
-                            if errors > 0 or (warnings > 0 and warnings != minor):
-                                print(f"{source_file}: failed to validate. Skipping!")
-                                self.callback(f"----\n{source_file}: failed to validate. Skipping!")
-                                continue
-                        keywords = metadata.get("Keywords", [])
-                        if metadata.get("Composite:Keywords"):
-                            keywords += metadata.get("Composite:Keywords")
-                        if metadata.get("Subject"):
-                            keywords += metadata.get("Subject")
-                        if metadata.get("IPTC:Keywords"):
-                            keywords += metadata.get("IPTC:Keywords")
-                        if metadata.get("MWG:Keywords"):
-                            keywords += metadata.get("MWG:Keywords")                            
-                        if keywords:
-                            metadata["Keywords"] = keywords
-                        self.process_file(metadata)
+                try:
+                    directory, files = self.metadata_queue.get(timeout=1)
+                    self.callback(f"Processing directory: {directory}")
+                    metadata_list = self._get_metadata_batch(files)
                     
-                    if self.check_pause_stop():
-                        return
-                
-                self.files_processed +=1
-                self.update_progress()
-                
-            except queue.Empty:
-                continue
+                    for metadata in metadata_list:
+                                
+
+                        if metadata:
+                            if not self.config.skip_verify:
+                                # Check if ExifTool returned any Warnings or Errors. It comes as value "0 0 0"
+                                # for number of errors warnings and minor warnings
+                                if "ExifTool:Validate" in metadata:
+                                    errors, warnings, minor = map(int, metadata.get("ExifTool:Validate", "0 0 0").split())
+                                    source_file = metadata.get("SourceFile")
+                                    if errors > 0:
+                                        print(f"{source_file}: failed to validate. Skipping!")
+                                        self.callback(f"\n{source_file}: failed to validate. Skipping!")
+                                        self.files_processed +=1
+                                        continue
+                                                       
+                            keywords = []
+                            status = None
+                            identifier = None
+                            caption = None
+                            
+                            # Make a copy with only the fields we want to write
+                            new_metadata = {}
+                            new_metadata["SourceFile"] = metadata.get("SourceFile")
+                            
+                            for key, value in metadata.items():
+                            
+                                # Collect all keywords
+                                if key in self.keyword_fields:
+                                    keywords.extend(value)
+                            
+                                # Ignore any duplicate captions
+                                if key in self.caption_fields:
+                                    caption = value
+                              
+                                # Processing fields
+                                if key in self.identifier_fields:
+                                    identifier = value
+                                if key in self.status_fields:
+                                    status = value
+                                    
+                            # Standardize the fields                             
+                            if keywords:
+                                new_metadata["MWG:Keywords"] = keywords
+                            if caption:
+                                new_metadata["MWG:Description"] = caption
+                            if status:
+                                new_metadata["XMP:Status"] = status
+                            if identifier:
+                                new_metadata["XMP:Identifier"] = identifier
+                            self.files_processed += 1
+                            self.process_file(new_metadata)
+
+                            
+                        if self.check_pause_stop():
+                            return
+                    
+                    self.update_progress()
+                    
+                except queue.Empty:
+                    continue
+        finally:
+            try:
+                self.et.terminate()
+                self.callback("ExifTool process terminated cleanly")
+            except Exception as e:
+                self.callback(f"Warning: ExifTool termination error: {str(e)}")
 
     def _get_metadata_batch(self, files):
-        with exiftool.ExifToolHelper(check_execute=False) as et:  
-            return et.get_tags(files, self.exiftool_fields, "-validate")         
+        """Get metadata for a batch of files using persistent ExifTool instance"""
+        exiftool_fields = self.keyword_fields + self.caption_fields + self.identifier_fields + self.status_fields 
+        
+        try:
+            if self.config.skip_verify:
+                params = []
+            else:
+                params = ["-validate"]   
+            return self.et.get_tags(files, tags=exiftool_fields, params=params)
+            
+        except Exception as e:
+            print("Exiftool error")
+            return []
 
     def update_progress(self):
         files_processed = self.files_processed
@@ -615,245 +691,208 @@ class FileProcessor:
         self.callback(f"Directory processed. Files remaining in queue: {files_remaining}")
         
     def process_file(self, metadata):
-        """ This is a lot more complicated than it should be.
-            We only use UUID set in XMP:Identifier to ID files
-            so that the files being moved around or renamed 
-            will not affect their status. Thus we need to 
-            at least temporarily maintain a state for them
-            as they are being processed and if the process stops.
+        """ Process a single file and update its metadata in one operation.
+            This minimizes the number of writes to the file.
         """
         try:    
-            # ExifTool always returns 'SourceFile' as the file full path
-            # whether it is asked for or not
             file_path = metadata["SourceFile"]
             
-            # If the file doesn't exist anymore, remove it from the database
-            if not os.path.isfile(file_path):
-                if metadata.get("XMP:Identifier"):
-                    self.db.remove(where("XMP:Identifier") == metadata.get("XMP:Identifier"))
-                    self.callback(f"Removed missing file from database: {file_path}")
+            # If the file doesn't exist anymore, skip it
+            if not os.path.exists(file_path):
+                self.callback(f"File no longer exists: {file_path}")
                 return
-
-            if not self.config.dry_run:
-                metadata_added = self.check_uuid(metadata, file_path)
-                if metadata_added is None:
-                    return
-                else:
-                    metadata = metadata_added
-            image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
-
-            if image_type is not None:
-                start_time = time.time()
-                if self.config.write_caption:
-                    caption = clean_string(
-                        self.llm_processor.describe_content(
-                            file_path, task="caption"
-                        )
-                    )
-                    if caption:
-                        metadata["Description"] = caption
-                metadata = self.update_metadata(metadata, file_path)
-                
-                if metadata.get("status") == "success":    
-                    end_time = time.time()
-                    processing_time = end_time - start_time
-                    self.total_processing_time += processing_time
-                    self.files_completed += 1
-                    in_queue = self.indexer.total_files_found - self.files_processed
-                    average_time = self.total_processing_time / self.files_completed
-                    time_left = average_time * in_queue
-                    time_left_unit = "s"
-                    
-                    if time_left > 180:
-                        time_left = time_left / 60
-                        time_left_unit = "mins"
-                    
-                    if time_left < 0:
-                        time_left = 0
-                    
-                    if in_queue < 0:
-                        in_queue = 0
-                    
-                    self.callback(
-                        f"Processing time: {processing_time:.2f}s. Average processing time: {average_time:.2f}s"
-                    )
-                    self.callback(
-                        f"Processed: {self.files_processed}, In queue: {in_queue}, Time remaining (est): {time_left:.2f}{time_left_unit}"
-                    )
-                    return
-                
-                elif metadata.get("status") == "failed":
-                    if not self.config.dry_run:
-                        self.update_db(metadata)
-                    print(f"Metadata creation failed for {file_path}")
-                    return
-                
-                elif metadata.get("status") == "retry":
-                    print(f"Retrying metadata creation for {file_path}")
-                    self.process_file(metadata)
-                
-                else:
-                    print(f"Error processing file: {file_path}")
-                    return
-                
-                if self.check_pause_stop():
-                        return
             
-            else:
-                print(f"Not a supported image type: {file_path}")
-        
-        except Exception as e:
-            print(f"Error processing: {file_path}: {str(e)}")
-            metadata["status"] = "failed"
+            # Check UUID and status
+            metadata = self.check_uuid(metadata, file_path)
+            if not metadata:
+                return
+                
+            image_type = self.get_file_type(os.path.splitext(file_path)[1].lower())
+            if image_type is None:
+                self.callback(f"Not a supported image type: {file_path}")
+                return
+                
+            # Process the file
+            start_time = time.time()
+            processed_image, image_path = self.image_processor.process_image(file_path)
+            updated_metadata = self.generate_metadata(metadata, processed_image)
+           
+            status = updated_metadata.get("XMP:Status")
+            
+            # Retry one time if failed
+            if not self.config.quick_fail and status == "retry":
+                print(f"Retrying {file_path} once")
+                updated_metadata = self.generate_metadata(metadata, processed_image)      
+                status = updated_metadata.get("XMP:Status")
+            
+            # If retry didn't work, mark failed
+            if not status == "success":
+                metadata["XMP:Status"] = "failed"
+                if not self.config.dry_run:
+                    self.write_metadata(file_path, metadata)
+                return
+                
             if not self.config.dry_run:
-                self.update_db(metadata)
-            return
+                self.write_metadata(file_path, updated_metadata)
                 
-    def extract_values(self, data):
-        """ Goes through a dict and pulls all the 
-            values out and returns them as a list
-            Part of the output processing from whatever
-            the LLM gives us.
-        """
-        if isinstance(data, list):
-            return data
-        
-        elif isinstance(data, dict):
-            return [
-                item
+            print(f"{file_path}: {status}")
+            end_time = time.time()
+            processing_time = end_time - start_time
+            self.total_processing_time += processing_time
+            self.files_completed += 1
+            
+            # Calculate and display progress info
+            in_queue = self.indexer.total_files_found - self.files_processed
+            average_time = self.total_processing_time / self.files_completed
+            time_left = average_time * in_queue
+            time_left_unit = "s"
+            
+            if time_left > 180:
+                time_left = time_left / 60
+                time_left_unit = "mins"
+            
+            if time_left < 0:
+                time_left = 0
+            
+            if in_queue < 0:
+                in_queue = 0
+            if status == "success":
+                self.callback("")    
+                self.callback(f"<b>Image:</b> {os.path.basename(file_path)}, <b>Status:</b> {status}")
                 
-                for sublist in data.values()        
-                for item in (
-                    extract_values(sublist)
-                    if isinstance(sublist, (dict, list))
-                    else [sublist]
-                )
-            ]
-        else:
-            return []
+                if updated_metadata.get("MWG:Description"):
+                    self.callback(f"<b>Caption:</b> {updated_metadata.get('MWG:Description')}") 
+                    self.callback(f"<b>Keywords:</b> {updated_metadata.get('MWG:Keywords', '')}")
 
-    def process_keywords(self, metadata, llm_metadata):
+                self.callback(
+                    f"Processing time: {processing_time:.2f}s Average processing time: {average_time:.2f}s"
+                )
+                self.callback(
+                    f"Processed: {self.files_processed}, In queue: {in_queue}, Time remaining (est): {time_left:.2f}{time_left_unit}"
+                )
+            if self.check_pause_stop():
+                return
+            
+        except Exception as e:
+            self.callback(f"\nError processing: {file_path}: {str(e)}")
+
+            
+            return
+    
+    def generate_metadata(self, metadata, processed_image):
+        """ Generate metadata without writing to file.
+            Returns (metadata_dict)
+            
+            short_caption will get a short caption in a single generation
+            
+            detailed_caption will get get a detailed caption using two
+            generations
+            
+            update_caption appends new caption to existing caption to the existing description.
+            
+        """
+        new_metadata = {}
+       
+        existing_caption = metadata.get("MWG:Description")
+        caption = None
+        keywords = None
+        detailed_caption = ""
+        old_keywords = metadata.get("MWG:Keywords", [])
+        file_path = metadata["SourceFile"]
+        try:
+            # Determine whether to generate caption, keywords, or both
+            if not self.config.no_caption and self.config.detailed_caption:
+                data = clean_json(self.llm_processor.describe_content(task="keywords", processed_image=processed_image))
+                detailed_caption = clean_string(self.llm_processor.describe_content(task="caption", processed_image=processed_image))               
+                if existing_caption and self.config.update_caption:
+                    caption = existing_caption + "<generated>" + detailed_caption + "</generated>"
+                else:
+                    caption = detailed_caption
+                if isinstance(data, dict):
+                    keywords = data.get("Keywords")
+                   
+            else:
+                data = clean_json(self.llm_processor.describe_content(task="caption_and_keywords", processed_image=processed_image))
+                         
+                if isinstance(data, dict):
+                    keywords = data.get("Keywords")
+                    if not existing_caption and not self.config.no_caption:
+                        caption = data.get("Caption")
+                    elif existing_caption and self.config.update_caption:
+                        caption = existing_caption + "<generated>" + data.get("Caption") + "</generated>"
+                    elif data.get("Caption") and not self.config.no_caption:
+                        caption = data.get("Caption")
+                    else:
+                        caption = existing_caption
+                        
+            if not keywords:
+                status = "retry"
+                            
+            else:
+                status = "success"
+                keywords = self.process_keywords(metadata, keywords)
+
+            new_metadata["MWG:Description"] = caption
+            new_metadata["MWG:Keywords"] = keywords
+            new_metadata["XMP:Status"] = status
+            new_metadata["XMP:Identifier"] = metadata.get("XMP:Identifier", str(uuid.uuid4()))
+            new_metadata["SourceFile"] = file_path
+            return new_metadata
+            
+        except Exception as e:
+            self.callback(f"Parse error for {file_path}: {str(e)}")
+            metadata["XMP:Status"] = "retry"
+            return metadata
+            
+    def write_metadata(self, file_path, metadata):
+        """Write metadata using persistent ExifTool instance"""
+        if self.config.dry_run:
+            print("Dry run. Not writing.")
+            return True
+        try:
+            params = ["-P"]
+            if self.config.no_backup:
+                params.append("-overwrite_original")
+                
+            # Use existing ExifTool instance
+            self.et.set_tags(file_path, tags=metadata, params=params)
+            return True
+            
+        except Exception as e:
+            self.callback(f"\nError writing metadata to {file_path}: {str(e)}")
+            print(f"\nError writing metadata to {file_path}: {str(e)}")
+            return False 
+    
+    def process_keywords(self, metadata, new_keywords):
         """ Normalize extracted keywords and deduplicate them.
             If update is configured, combine the old and new keywords.
-            Only extracted keywords are normalized, the rest are added to the set as-is.
         """
         all_keywords = set()
-        
-        # Handle existing keywords if updating
-        
+              
         if self.config.update_keywords:
-            existing_keywords = metadata.get("Keywords", [])
-            
-            # Handle case where Keywords is a string instead of list
+            existing_keywords = metadata.get("MWG:Keywords", [])
             if isinstance(existing_keywords, str):
-                existing_keywords = [existing_keywords]
-            elif not isinstance(existing_keywords, list):
-                existing_keywords = []
+                existing_keywords = existing_keywords.split(",").strip()
                 
             for keyword in existing_keywords:
-                # Make sure keywords conform to our structure
                 normalized = normalize_keyword(keyword, self.banned_words)
                 if normalized:
                     all_keywords.add(normalized)
-                    
-        # Process new keywords from LLM
-        extracted_keywords = self.extract_values(llm_metadata.get("Keywords", []))
-        
-        if extracted_keywords:
-            # Make sure keywords conform to our structure
-            for keyword in extracted_keywords:
-                normalized = normalize_keyword(keyword, self.banned_words)
-                if normalized:
-                    all_keywords.add(normalized)
-       
+                           
+        for keyword in new_keywords:
+            normalized = normalize_keyword(keyword, self.banned_words)
+            if normalized:
+                all_keywords.add(normalized)
+   
         if all_keywords:        
             return list(all_keywords)
         else:
             return None
-    
-    def update_metadata(self, metadata, file_path):
-        """ First query the LLM, fix the inevitably malformed JSON,
-            check to see if there is a dict with value Keywords. Put them
-            in, clearing other keyword fields. If it fails any part, mark retry
-            and try again. Another fail gets marked as fail. exiftool helper
-            is called at the end to put the metdata in.
-        """
-        file_path = metadata["SourceFile"]
         
-        try:
-            # Is there an existing caption? If so, use it with the image
-            if metadata.get("Description"):
-                llm_metadata = clean_json(self.llm_processor.describe_content(file_path, task="keywords_with_caption", caption=metadata.get("Description")))
-            else:
-                llm_metadata = clean_json(self.llm_processor.describe_content(file_path, task="keywords"))
-            
-            # Check if the json got parsed and Keywords is a key
-            if llm_metadata["Keywords"] or llm_metadata["keywords"]:
-                xmp_metadata = {}
-                
-                # If detailed caption was generated, use that 
-                if metadata.get("Description") and self.config.write_caption:
-                    xmp_metadata["XMP:Description"] = metadata["Description"]
-                
-                # If replace is set, use caption in keywords dict if exists
-                elif not self.config.update_keywords:
-                    xmp_metadata["XMP:Description"] = llm_metadata.get("Caption")
-                xmp_metadata["XMP:Identifier"] = metadata.get(
-                    "XMP:Identifier", str(uuid.uuid4())
-                )
-                xmp_metadata["MWG:Keywords"] = self.process_keywords(
-                    metadata, llm_metadata
-                )             
-                output = (
-                    f"---\nImage: {os.path.basename(file_path)}\nKeywords: "
-                    + ", ".join(xmp_metadata.get("MWG:Keywords", ""))
-                )
-                if xmp_metadata.get("XMP:Description"):
-                    output +=  (f"\nCaption: {xmp_metadata.get('XMP:Description')}")
-        except:
-            print(f"Parse error for {file_path}.")
-            if metadata.get("status") == "retry" or metadata.get("status") == "failed":
-                metadata["status"] = "failed"
-                self.callback(f"\n---\nParse error for {file_path}, it has been marked as failed.")
-            else:
-                metadata["status"] = "retry"
-            return metadata
-
-        if self.config.dry_run:
-            self.callback(f"{output}\nSuccess, but nothing written in pretend mode.\n")
-            metadata["status"] = "success"
-            return metadata
-        else:
-            try:
-                if self.config.no_backup:
-                    with exiftool.ExifToolHelper() as et:
-                        et.set_tags(
-                            file_path,
-                            tags=xmp_metadata,
-                            params=["-P", "-overwrite_original"],
-                        )
-                else:
-                    with exiftool.ExifToolHelper() as et:
-                        et.set_tags(file_path, tags=xmp_metadata, params=["-P"])
-                metadata["status"] = "success"
-                xmp_metadata["status"] = "success"
-                self.update_db(xmp_metadata)
-                self.callback(output)
-                return metadata
-            
-            except Exception as e:
-                print(f"Error updating metadata for {file_path}: {str(e)}")
-                if metadata.get("status") == "retry" or metadata.get("status") == "failed":
-                    metadata["status"] = "failed"
-                    self.callback(f"\n---\nParse error for {file_path}, it has been marked as failed.")
-                else:
-                    metadata["status"] = "retry"
-                return metadata
-
 def main(config=None, callback=None, check_paused_or_stopped=None):
     if config is None:
         config = Config.from_args()
-
+             
     file_processor = FileProcessor(
         config, check_paused_or_stopped, callback
     )      

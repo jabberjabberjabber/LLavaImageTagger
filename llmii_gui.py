@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import shutil
 import llmii
 from koboldapi import KoboldAPI
 from PyQt6.QtCore import QThread, pyqtSignal, QObject, Qt
@@ -29,18 +30,36 @@ class SettingsDialog(QDialog):
         api_layout.addWidget(self.api_password_input)
         layout.addLayout(api_layout)
 
-        caption_group = QGroupBox("Caption Settings")
+        system_instruction_layout = QHBoxLayout()
+        self.system_instruction_input = QLineEdit("You are a helpful assistant.")
+        system_instruction_layout.addWidget(QLabel("System Instruction:"))
+        system_instruction_layout.addWidget(self.system_instruction_input)
+        layout.addLayout(system_instruction_layout)
+
+        caption_group = QGroupBox("Caption Options")
         caption_layout = QVBoxLayout()
-        
+
         caption_instruction_layout = QHBoxLayout()
-        self.caption_instruction_input = QLineEdit("Describe the image in detail. Be specific.")
+        self.caption_instruction_input = QLineEdit("Describe the image.")
         caption_instruction_layout.addWidget(QLabel("Caption Instruction:"))
         caption_instruction_layout.addWidget(self.caption_instruction_input)
         caption_layout.addLayout(caption_instruction_layout)
-        
-        self.write_caption_checkbox = QCheckBox("Write a detailed caption (overwrites existing captions and takes twice as long)")
-        caption_layout.addWidget(self.write_caption_checkbox)
-        
+
+        self.caption_radio_group = QButtonGroup(self)
+        self.detailed_caption_radio = QRadioButton("Generate a detailed caption (takes two LLM queries)")
+        self.short_caption_radio = QRadioButton("Generate a short caption (single LLM query)")
+        self.no_caption_radio = QRadioButton("Do not add a caption")
+
+        self.caption_radio_group.addButton(self.detailed_caption_radio)
+        self.caption_radio_group.addButton(self.short_caption_radio)
+        self.caption_radio_group.addButton(self.no_caption_radio)
+
+        self.short_caption_radio.setChecked(True)
+
+        caption_layout.addWidget(self.detailed_caption_radio)
+        caption_layout.addWidget(self.short_caption_radio)
+        caption_layout.addWidget(self.no_caption_radio)
+
         caption_group.setLayout(caption_layout)
         layout.addWidget(caption_group)
 
@@ -48,21 +67,22 @@ class SettingsDialog(QDialog):
         self.gen_count = QSpinBox()
         self.gen_count.setMinimum(50)
         self.gen_count.setMaximum(1000)
-        self.gen_count.setValue(250)
+        self.gen_count.setValue(150)
         gen_count_layout.addWidget(QLabel("GenTokens: "))
         gen_count_layout.addWidget(self.gen_count)
         layout.addLayout(gen_count_layout)
         
-        options_group = QGroupBox("Options")
+        options_group = QGroupBox("File Options")
         options_layout = QVBoxLayout()
         
         self.no_crawl_checkbox = QCheckBox("Don't crawl subdirectories")
         self.reprocess_all_checkbox = QCheckBox("Reprocess all files again")
-        self.reprocess_failed_checkbox = QCheckBox("Reprocess failed files")
-        self.reprocess_orphans_checkbox = QCheckBox("Reprocess orphan files")
+        self.reprocess_failed_checkbox = QCheckBox("Reprocess previously failed files")
+        self.reprocess_orphans_checkbox = QCheckBox("If file has UUID, mark status (recommended)")
         self.no_backup_checkbox = QCheckBox("Don't make backups")
-        self.dry_run_checkbox = QCheckBox("Pretend mode")
-        self.skip_verify_checkbox = QCheckBox("Don't check files for errors")
+        self.dry_run_checkbox = QCheckBox("Pretend mode / Dry run")
+        self.skip_verify_checkbox = QCheckBox("No file checking (not recommended)")
+        self.quick_fail_checkbox = QCheckBox("Quick fail (recommended for newer models)")
         
         options_layout.addWidget(self.no_crawl_checkbox)
         options_layout.addWidget(self.reprocess_all_checkbox)
@@ -71,22 +91,20 @@ class SettingsDialog(QDialog):
         options_layout.addWidget(self.no_backup_checkbox)
         options_layout.addWidget(self.dry_run_checkbox)
         options_layout.addWidget(self.skip_verify_checkbox)
+        options_layout.addWidget(self.quick_fail_checkbox)
         
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
         
-        xmp_group = QGroupBox("Metadata Tags to Generate")
+        xmp_group = QGroupBox("Metadata Options")
         xmp_layout = QVBoxLayout()
         
-        self.keywords_radio_group = QButtonGroup(self)
-        self.overwrite_keywords_radio = QRadioButton("Clear existing keywords and captions and write new ones")
-        self.update_keywords_radio = QRadioButton("Add to existing keywords")
-        
-        self.keywords_radio_group.addButton(self.overwrite_keywords_radio)
-        self.keywords_radio_group.addButton(self.update_keywords_radio)
-        
-        xmp_layout.addWidget(self.overwrite_keywords_radio)
-        xmp_layout.addWidget(self.update_keywords_radio)
+        self.update_keywords_checkbox = QCheckBox("Add new keywords to existing keywords")
+        self.update_keywords_checkbox.setChecked(True)
+        self.update_caption_checkbox = QCheckBox("Add new caption to existing caption with <caption>")
+        self.update_caption_checkbox.setChecked(False)
+        xmp_layout.addWidget(self.update_keywords_checkbox)
+        xmp_layout.addWidget(self.update_caption_checkbox)
         
         xmp_group.setLayout(xmp_layout)
         layout.addWidget(xmp_group)
@@ -100,11 +118,8 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(cancel_button)
         layout.addLayout(button_layout)
         
-        self.update_keywords_radio.setChecked(True)
-        self.reprocess_orphans_checkbox.setChecked(False)
-        
         self.load_settings()
-            
+     
     def load_settings(self):
         try:
             if os.path.exists('settings.json'):
@@ -113,23 +128,31 @@ class SettingsDialog(QDialog):
                     
                 self.api_url_input.setText(settings.get('api_url', 'http://localhost:5001'))
                 self.api_password_input.setText(settings.get('api_password', ''))
-                self.gen_count.setValue(settings.get('gen_count', 250))
+                self.system_instruction_input.setText(settings.get('system_instruction', 'You are a helpful assistant.'))
+                self.gen_count.setValue(settings.get('gen_count', 150))
                 
                 self.no_crawl_checkbox.setChecked(settings.get('no_crawl', False))
                 self.reprocess_failed_checkbox.setChecked(settings.get('reprocess_failed', False))
                 self.reprocess_all_checkbox.setChecked(settings.get('reprocess_all', False))
-                self.reprocess_orphans_checkbox.setChecked(settings.get('reprocess_orphans', False))
+                self.reprocess_orphans_checkbox.setChecked(settings.get('reprocess_orphans', True))
                 self.no_backup_checkbox.setChecked(settings.get('no_backup', False))
                 self.dry_run_checkbox.setChecked(settings.get('dry_run', False))
                 self.skip_verify_checkbox.setChecked(settings.get('skip_verify', False))
-                
+                self.quick_fail_checkbox.setChecked(settings.get('quick_fail', False))
                 self.caption_instruction_input.setText(settings.get('caption_instruction', 'Describe the image in detail. Be specific.'))
-                self.write_caption_checkbox.setChecked(settings.get('write_caption', False))
                 
-                if settings.get('overwrite_keywords', False):
-                    self.overwrite_keywords_radio.setChecked(True)
+                # Set radio button based on settings
+                if settings.get('detailed_caption', False):
+                    self.detailed_caption_radio.setChecked(True)
+                elif settings.get('no_caption', False):
+                    self.no_caption_radio.setChecked(True)
                 else:
-                    self.update_keywords_radio.setChecked(True)
+                    # Default to short caption
+                    self.short_caption_radio.setChecked(True)
+                    
+                self.update_keywords_checkbox.setChecked(settings.get('update_keywords', True))
+                self.update_caption_checkbox.setChecked(settings.get('update_caption', False))
+                    
         except Exception as e:
             print(f"Error loading settings: {e}")
             
@@ -137,6 +160,7 @@ class SettingsDialog(QDialog):
         settings = {
             'api_url': self.api_url_input.text(),
             'api_password': self.api_password_input.text(),
+            'system_instruction': self.system_instruction_input.text(),
             'gen_count': self.gen_count.value(),
             'no_crawl': self.no_crawl_checkbox.isChecked(),
             'reprocess_failed': self.reprocess_failed_checkbox.isChecked(),
@@ -145,9 +169,13 @@ class SettingsDialog(QDialog):
             'no_backup': self.no_backup_checkbox.isChecked(),
             'dry_run': self.dry_run_checkbox.isChecked(),
             'skip_verify': self.skip_verify_checkbox.isChecked(),
-            'overwrite_keywords': self.overwrite_keywords_radio.isChecked(),
+            'quick_fail': self.quick_fail_checkbox.isChecked(),
+            'update_keywords': self.update_keywords_checkbox.isChecked(),
             'caption_instruction': self.caption_instruction_input.text(),
-            'write_caption': self.write_caption_checkbox.isChecked()
+            'detailed_caption': self.detailed_caption_radio.isChecked(),
+            'short_caption': self.short_caption_radio.isChecked(),
+            'no_caption': self.no_caption_radio.isChecked(),
+            'update_caption': self.update_caption_checkbox.isChecked(),
         }
         
         try:
@@ -214,11 +242,7 @@ class ImageIndexerGUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("Image Indexer GUI")
         self.setGeometry(100, 100, 800, 600)
-        
-        # Remove all menubar code
-        
         self.settings_dialog = SettingsDialog(self)
-
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
@@ -247,33 +271,36 @@ class ImageIndexerGUI(QMainWindow):
         self.api_status_label = QLabel("API Status: Checking...")
         layout.addWidget(self.api_status_label)
         
-        instruction_group = QGroupBox("Keyword Generation Instructions")
+        # Create a tabbed layout for instructions
+        instruction_group = QGroupBox("Instructions")
         instruction_layout = QVBoxLayout()
         
+        # Keyword generation instructions
         self.instruction_input = QPlainTextEdit()
-        default_instruction = """Your task is to first generate a detailed description for the image. If a description is included with the image, use that one.
+        default_instruction = """First, generate a detailed caption for the image.
 
-Next, generate at least 10 unique Keywords for the image. Include:
+Next, generate 7 unique one or two word keywords for the image. Include the following when present:
 
- - Actions
- - Setting, location and background
- - Items and structures
- - Colors and textures
- - Composition, framing
- - Photographic style 
- - If there is one or more person:
-   - Subjects
+ - Themes, concepts
+ - Items, animals, objects
+   - Key features, aspects
+ - Structures, landmarks, setting
+   - Foreground and background elements   
+ - Notable colors, textures, styles
+ - Actions, activities
+ - Human demographics:
    - Physical appearance
-   - Clothing
-   - Gender
-   - Age
-   - Professions
-   - Relationships 
-
-Provide one word per entry; if more than one word is required split into two entries. Do not combine words. Generate ONLY a JSON object with the keys Caption and Keywords as follows {"Caption": str, "Keywords": [list]}"""
+   - Age range
+   - Apparent ancestry
+   - Visible occupation/role
+   - Obvious relationships between individuals
+   - Clearly conveyed emotions, expressions, body language
+   
+Limit response to things clearly and obviously apparent; do not guess. Do not combine words. Use ENGLISH only. Generate ONLY a JSON object with the keys Caption and Keywords as follows {"Caption": str, "Keywords": []}"""
         
         self.instruction_input.setPlainText(default_instruction)
         self.instruction_input.setFixedHeight(350)
+        
         
         instruction_layout.addWidget(QLabel("Instruction:"))
         instruction_layout.addWidget(self.instruction_input)
@@ -305,8 +332,6 @@ Provide one word per entry; if more than one word is required split into two ent
         self.output_area.setReadOnly(True)
         output_layout.addWidget(QLabel("Output:"))
         output_layout.addWidget(self.output_area)
-        
-        self.instruction_input.setFixedHeight(350)
         
         layout.addWidget(output_widget)
 
@@ -382,7 +407,7 @@ Provide one word per entry; if more than one word is required split into two ent
             self.api_status_label.setText("API Status: Waiting for connection...")
             self.api_status_label.setStyleSheet("color: red")
             self.run_button.setEnabled(False)
-
+            
     def run_indexer(self):
         if not self.api_is_ready:
             QMessageBox.warning(self, "API Not Ready", 
@@ -397,6 +422,7 @@ Provide one word per entry; if more than one word is required split into two ent
         # Load settings from settings dialog
         config.api_url = self.settings_dialog.api_url_input.text()
         config.api_password = self.settings_dialog.api_password_input.text()
+        config.system_instruction = self.settings_dialog.system_instruction_input.text()
         config.no_crawl = self.settings_dialog.no_crawl_checkbox.isChecked()
         config.reprocess_failed = self.settings_dialog.reprocess_failed_checkbox.isChecked()
         config.reprocess_all = self.settings_dialog.reprocess_all_checkbox.isChecked()
@@ -404,23 +430,24 @@ Provide one word per entry; if more than one word is required split into two ent
         config.no_backup = self.settings_dialog.no_backup_checkbox.isChecked()
         config.dry_run = self.settings_dialog.dry_run_checkbox.isChecked()
         config.skip_verify = self.settings_dialog.skip_verify_checkbox.isChecked()
+        config.quick_fail = self.settings_dialog.quick_fail_checkbox.isChecked()
+        
+        # Load caption settings
+        config.detailed_caption = self.settings_dialog.detailed_caption_radio.isChecked()
+        config.short_caption = self.settings_dialog.short_caption_radio.isChecked()
+        config.no_caption = self.settings_dialog.no_caption_radio.isChecked()
+        config.caption_instruction = self.settings_dialog.caption_instruction_input.text()
         
         # Load instruction from main window
         config.instruction = self.instruction_input.toPlainText()
         
-        # Load caption settings from settings dialog
-        config.write_caption = self.settings_dialog.write_caption_checkbox.isChecked()
-        config.caption_instruction = self.settings_dialog.caption_instruction_input.text()
         
-        if self.settings_dialog.overwrite_keywords_radio.isChecked():
-            config.overwrite_keywords = True
-            config.update_keywords = False
-        elif self.settings_dialog.update_keywords_radio.isChecked():
-            config.overwrite_keywords = False
-            config.update_keywords = True
-            
+        # Load update keywords setting
+        config.update_keywords = self.settings_dialog.update_keywords_checkbox.isChecked()
+        config.update_caption = self.settings_dialog.update_caption_checkbox.isChecked()
+        #config.overwrite_caption = self.settings_dialog.overwrite_caption_checkbox.isChecked()            
         config.gen_count = self.settings_dialog.gen_count.value()
-     
+             
         self.indexer_thread = IndexerThread(config)
         self.indexer_thread.output_received.connect(self.update_output)
         self.indexer_thread.finished.connect(self.indexer_finished)
@@ -429,7 +456,7 @@ Provide one word per entry; if more than one word is required split into two ent
         self.indexer_thread.start()
 
         self.output_area.clear()
-        self.output_area.append("Running Image Indexer...\n")
+        self.output_area.append("Running Image Indexer...")
         self.run_button.setEnabled(False)
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
@@ -460,7 +487,7 @@ Provide one word per entry; if more than one word is required split into two ent
         self.stop_button.setEnabled(False)
 
     def indexer_finished(self):
-        self.update_output("Image Indexer finished.")
+        self.update_output("\nImage Indexer finished.")
         self.run_button.setEnabled(True)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
