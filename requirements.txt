@@ -1,0 +1,11 @@
+pyqt6
+tinydb
+json_repair
+uuid
+pyexiftool
+pillow
+pillow_heif
+rawpy
+regex
+requests
+
